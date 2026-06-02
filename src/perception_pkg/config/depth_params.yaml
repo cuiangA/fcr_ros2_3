@@ -1,0 +1,5 @@
+# perception_pkg/config/depth_params.yaml
+# 深度估计节点参数
+depth_estimator_node:
+  ros__parameters:
+    camera_frame: "camera_link"  # 相机在 TF 树中的坐标系名称（用于将 2D 点反投影到 3D）

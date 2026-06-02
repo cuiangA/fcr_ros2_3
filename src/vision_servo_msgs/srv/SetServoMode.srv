@@ -1,0 +1,10 @@
+# SetServoMode.srv — Switch between visual servoing modes at runtime
+uint8 IBVS=0                       # Image-Based Visual Servoing
+uint8 PBVS=1                       # Position-Based Visual Servoing
+uint8 HYBRID=2                     # Hybrid (2.5D) Visual Servoing
+uint8 MPC=3                        # Model Predictive Control
+uint8 RL=4                         # Reinforcement Learning
+uint8 mode
+---
+bool success
+string message

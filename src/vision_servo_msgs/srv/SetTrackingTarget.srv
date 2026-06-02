@@ -1,0 +1,8 @@
+# SetTrackingTarget.srv — Select which target to track by ID or class
+int32 target_id                    # Target ID to track (-1 = auto-select largest/highest-conf)
+string class_name                  # Class filter (empty = any class)
+bool enable                        # true = start tracking, false = stop
+---
+bool success
+string message
+int32 assigned_id                  # ID of the target being tracked

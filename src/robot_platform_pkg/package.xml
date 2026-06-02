@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <!--
+  @file package.xml
+  @brief robot_platform_pkg 包清单文件。
+
+  机器人平台硬件驱动包，包含：
+    - LEKIWI 三全向轮底盘驱动（串口通信 + 运动学解算）
+    - DJI RS2 云台驱动（CAN 总线通信）
+    - BNO055 IMU 驱动（I2C 通信）
+    - 里程计节点（轮速 + IMU 融合）
+    - 平台管理节点（底盘/云台/IMU 状态聚合）
+
+  所有驱动均通过抽象接口支持真实硬件和仿真双模式，
+  通过 use_sim 参数在运行时切换。
+  -->
+
+  <name>robot_platform_pkg</name>
+  <version>0.1.0</version>
+  <description>LEKIWI 底盘、DJI RS2 云台、BNO055 IMU、里程计的硬件接口和驱动</description>
+  <maintainer email="dev@fcr-project.org">FCR Dev Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>vision_servo_msgs</depend>     <!-- GimbalCmd, PlatformState 消息 -->
+  <depend>geometry_msgs</depend>         <!-- Twist, Pose, Transform -->
+  <depend>sensor_msgs</depend>           <!-- Imu -->
+  <depend>nav_msgs</depend>              <!-- Odometry -->
+  <depend>tf2_ros</depend>               <!-- TF 坐标变换广播 -->
+  <depend>tf2_geometry_msgs</depend>
+  <depend>Eigen3</depend>                <!-- 线性代数库（运动学、里程计） -->
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

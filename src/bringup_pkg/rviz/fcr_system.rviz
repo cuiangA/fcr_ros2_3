@@ -1,0 +1,42 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Description Source: Topic
+      Topic: /robot_description
+      Enabled: true
+    - Class: rviz_default_plugins/Odometry
+      Name: Odometry
+      Topic: /odom
+      Enabled: true
+    - Class: rviz_default_plugins/Image
+      Name: Camera
+      Topic: /camera/image_raw
+      Enabled: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Detections
+      Topic: /perception/detections_markers
+      Enabled: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Target 3D
+      Topic: /servo/target_marker
+      Enabled: true
+  Global Options:
+    Fixed Frame: odom
+    Frame Rate: 30
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 5.0
+      Focal Point: [0, 0, 0.5]

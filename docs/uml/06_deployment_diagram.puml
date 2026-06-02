@@ -1,0 +1,122 @@
+@startuml fcr_deployment_diagram
+' =============================================================================
+' FCR ROS2 Workspace — Deployment Diagram
+' =============================================================================
+
+skinparam backgroundColor #FEFEFE
+skinparam nodeBorderColor #333333
+skinparam componentBorderColor #555555
+
+title FCR 视觉伺服系统 — 部署图 (Deployment Diagram)
+
+' ═══════════════════════════════════════════════════════════════
+' Hardware Nodes
+' ═══════════════════════════════════════════════════════════════
+
+node "LEKIWI 底盘 (嵌入式工控机)\nUbuntu 22.04 + ROS2 Humble" as onboard {
+  node "robot_platform_pkg" as plat_onboard {
+    component "[Chassis Driver]\n/dev/ttyUSB0 @115200\n三轮全向电机控制" as ch_drv
+    component "[Gimbal Driver]\nCAN0 @1Mbps\nDJI RS2 CAN协议" as gim_drv
+    component "[IMU Driver]\n/dev/i2c-1\nBNO055 100Hz" as imu_drv
+    component "[Odometry Node]\nEKF + 三轮运动学" as odm
+    component "[Platform Manager]\n状态聚合" as plat_mgr
+  }
+
+  node "servo_control_pkg" as servo_onboard {
+    component "[Servo Manager]\n50Hz 控制循环" as mgr
+    component "[IBVS Controller]\npluginlib动态库" as ibvs
+    component "[Control Allocator]\n控制分配" as alloc
+  }
+
+  node "simulation_pkg" as sim_onboard {
+    component "[URDF Model]\nlekiwi_full.urdf.xacro" as urdf
+    component "[Gazebo World]" as gz
+  }
+
+  database "DDS Discovery\n(ROS_DOMAIN_ID=42)" as dds
+}
+
+node "Jetson Orin (边缘AI)\nUbuntu 22.04 + ROS2 Humble" as jetson {
+  node "perception_pkg" as perc_jetson {
+    component "[Detection Node]\nYOLOv8 TensorRT\nGPU加速 30FPS" as det
+    component "[Tracking Node]\nSORT/ByteTrack" as trk
+    component "[Depth Estimator]\nRGBD → 3D坐标" as depth
+  }
+}
+
+node "地面站 (开发PC)\nUbuntu 22.04 + ROS2 Humble" as ground {
+  node "bringup_pkg" as bringup_ground {
+    component "[Launch Master]\n一键启动脚本" as launch
+  }
+
+  node "可视化" as viz_ground {
+    component "[RViz2]\n3D可视化" as rviz
+    component "[Foxglove Bridge]\nWebSocket :8765" as fox
+  }
+
+  node "调试工具" as debug_ground {
+    component "[ros2 topic/param]\n命令行调试" as cli
+    component "[rqt_graph]\nTopic可视化" as rqt
+  }
+}
+
+node "外设" as peripherals {
+  component "[RealSense D435i]\nRGBD 深度相机\nUSB 3.0" as camera
+  component "[BNO055 IMU]\n9轴姿态传感器\nI2C" as imu_sensor
+  component "[DJI RS2 云台]\nCAN 2.0B\nID=0x201" as gimbal
+  component "[LEKIWI 电机]\n3× 无刷电机\n串口控制" as motors
+}
+
+' ═══════════════════════════════════════════════════════════════
+' Connections
+' ═══════════════════════════════════════════════════════════════
+
+' Hardware ↔ Onboard
+camera --> perc_jetson : USB 3.0\nRGB 640×480 @30Hz\nDepth 640×480 @30Hz
+imu_sensor --> imu_drv : I2C (地址 0x28)\n100Hz 9轴数据
+gimbal --> gim_drv : CAN 2.0B\n1Mbps
+motors --> ch_drv : /dev/ttyUSB0\n115200bps
+
+' Jetson ↔ Onboard (DDS)
+perc_jetson <--> dds : Ethernet / WiFi\n/perception/* topics
+dds <--> servo_onboard : Ethernet / WiFi\n/perception/targets_3d\n/platform/state
+
+' Onboard internal (DDS localhost)
+plat_onboard <--> dds : /cmd_vel, /odom, /imu/data
+
+' Ground station ← DDS
+dds --> ground : WiFi\n全量 Topic 订阅\n(监控+调试)
+
+' ═══════════════════════════════════════════════════════════════
+' Network Configuration
+' ═══════════════════════════════════════════════════════════════
+
+note bottom of dds
+  <b>DDS 网络配置</b>
+  RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+  ROS_DOMAIN_ID=42
+  ROS_LOCALHOST_ONLY=0  (多机通信)
+  CycloneDDS 配置:
+    · MaxMessageSize=65500B (图像分片)
+    · SocketReceiveBufferSize=10MB
+    · AllowMulticast=false (单播)
+end note
+
+note bottom of perc_jetson
+  <b>Jetson 部署说明</b>
+  · YOLOv8 导出为 TensorRT engine
+  · 使用 intra-process composition (零拷贝)
+  · 图像 topic 不跨机 (避免DDS大消息)
+  · 仅发布 TargetArray (小消息) 到工控机
+end note
+
+note bottom of onboard
+  <b>LEKIWI 工控机</b>
+  · Intel NUC / ARM SBC
+  · 控制循环 50Hz 实时优先级
+  · 底盘驱动 50Hz
+  · 云台驱动 100Hz
+  · IMU 100Hz
+end note
+
+@enduml

@@ -1,0 +1,10 @@
+# servo_control_pkg/config/allocator_params.yaml
+# 控制分配器参数 — 将相机速度分解为底盘 + 云台指令
+servo_manager:
+  ros__parameters:
+    allocation_ratio: 0.5         # 分配比例：0 = 全部由云台执行，1 = 全部由底盘执行
+    gimbal_yaw_limit: 3.14159    # 云台偏航角限位 (rad)，±π
+    gimbal_pitch_limit: 1.5708   # 云台俯仰角限位 (rad)，±π/2
+    chassis_linear_limit: 1.0    # 底盘线速度限制 (m/s)
+    chassis_angular_limit: 2.0   # 底盘角速度限制 (rad/s)
+    controller_plugin: "servo_control_pkg::IBVSController"  # 默认控制器插件

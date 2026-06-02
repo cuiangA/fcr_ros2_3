@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<!-- LEKIWI Full Robot: base + gimbal + sensors -->
+<robot name="lekiwi_fcr" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Include sub-models -->
+  <xacro:include filename="lekiwi_base.xacro"/>
+  <xacro:include filename="lekiwi_gimbal.xacro"/>
+  <xacro:include filename="lekiwi_sensors.xacro"/>
+
+  <!-- Instantiate base chassis -->
+  <xacro:lekiwi_base prefix=""/>
+
+  <!-- Instantiate gimbal on top of base -->
+  <xacro:lekiwi_gimbal parent="base_link" prefix=""/>
+
+  <!-- Instantiate sensors -->
+  <xacro:lekiwi_sensors parent="base_link" prefix=""/>
+
+  <!-- Gazebo plugin for omnidirectional drive -->
+  <gazebo>
+    <plugin name="omni_drive" filename="libgazebo_ros_planar_move.so">
+      <ros>
+        <remapping>cmd_vel:=/cmd_vel</remapping>
+        <remapping>odom:=/odom</remapping>
+      </ros>
+      <odom_frame_id>odom</odom_frame_id>
+      <robot_base_frame_id>base_link</robot_base_frame_id>
+      <linear_velocity_max>1.0</linear_velocity_max>
+      <angular_velocity_max>2.0</angular_velocity_max>
+    </plugin>
+  </gazebo>
+
+</robot>

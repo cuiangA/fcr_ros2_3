@@ -1,0 +1,347 @@
+@startuml fcr_class_diagram
+' =============================================================================
+' FCR ROS2 Workspace — Class Diagram (核心类层次)
+' =============================================================================
+
+skinparam classAttributeIconSize 0
+skinparam backgroundColor #FEFEFE
+skinparam classBorderColor #333333
+skinparam classFontSize 11
+
+' ═══════════════════════════════════════════════════════════════
+' Servo Controller Hierarchy
+' ═══════════════════════════════════════════════════════════════
+
+abstract class ServoControllerBase <<rclcpp::Node>> {
+  # fx_, fy_, cx_, cy_ : double
+  # width_, height_ : int
+  # goal_ : ServoGoal
+  # current_features_ : Vector6d
+  # feature_error_ : Vector6d
+  # interaction_matrix_ : Matrix6d
+  # lambda_gain_ : double
+  # iteration_count_ : int
+  --
+  + {abstract} computeVelocity(Target, dt) : optional<Vector6d>
+  + {abstract} getControllerType() : string
+  + initialize(fx,fy,cx,cy,w,h) : bool
+  + setDesiredFeatures(Vector6d, depth) : void
+  + getServoState() : ServoState
+  # computeInteractionMatrix(Vector6d, double) : Matrix6d
+  # extractFeatures(Target) : Vector6d
+}
+
+class IBVSController {
+  - gain_max_ : double
+  - gain_min_ : double
+  - error_threshold_slow_ : double
+  - use_adaptive_gain_ : bool
+  --
+  + computeVelocity(Target, dt) : optional<Vector6d>
+  + getControllerType() : string
+  - clampVelocity(Vector6d) : Vector6d
+  - computeAdaptiveGain(double) : double
+}
+
+class PBVSController {
+  - translational_gain_ : double
+  - rotational_gain_ : double
+  - desired_pose_ : Isometry3d
+  - current_pose_ : Isometry3d
+  - desired_pose_set_ : bool
+  --
+  + computeVelocity(Target, dt) : optional<Vector6d>
+  + getControllerType() : string
+  - reconstructPose(Vector6d, double) : Isometry3d
+  - computePoseError(Isometry3d) : Vector6d
+}
+
+class MPCController {
+  - horizon_ : int
+  - control_cost_weight_ : double
+  - state_history_ : deque<Vector6d>
+  --
+  + computeVelocity(Target, dt) : optional<Vector6d>
+  + getControllerType() : string
+  - solveMPC(Vector6d, Vector6d) : Vector6d
+  - predictState(Vector6d, Vector6d, double) : Vector6d
+}
+
+class RLController {
+  - policy_path_ : string
+  - policy_type_ : string
+  --
+  + computeVelocity(Target, dt) : optional<Vector6d>
+  + getControllerType() : string
+  - loadPolicy(string) : void
+  - inferPolicy(Vector12d) : Vector6d
+  - buildObservation(Target) : Vector12d
+}
+
+ServoControllerBase <|-- IBVSController
+ServoControllerBase <|-- PBVSController
+ServoControllerBase <|-- MPCController
+ServoControllerBase <|-- RLController
+
+note right of ServoControllerBase
+  ★ pluginlib 注册
+  plugins.xml:
+  IBVS → ibvs_controller
+  PBVS → pbvs_controller
+  运行时通过 SetServoMode 切换
+end note
+
+' ═══════════════════════════════════════════════════════════════
+' Control Allocator
+' ═══════════════════════════════════════════════════════════════
+
+class ControlAllocator {
+  - strategy_ : AllocationStrategy
+  - gimbal_yaw_limit_ : double
+  - gimbal_pitch_limit_ : double
+  - chassis_linear_limit_ : double
+  - chassis_angular_limit_ : double
+  - allocation_ratio_ : double
+  - smoothing_alpha_ : double
+  - prev_gimbal_yaw_ : double
+  - prev_gimbal_pitch_ : double
+  --
+  + configure(yaw,pitch,lin,ang,ratio) : void
+  + allocate(Vector6d, PlatformState, dt) : ControlAllocation
+}
+
+enum AllocationStrategy {
+  PRIORITY
+  WEIGHTED
+  OPTIMIZATION
+}
+
+class ControlAllocation <<struct>> {
+  + chassis_twist : Twist
+  + gimbal_yaw_rate : double
+  + gimbal_pitch_rate : double
+  + hold_yaw : bool
+  + hold_pitch : bool
+}
+
+ControlAllocator --> AllocationStrategy
+ControlAllocator ..> ControlAllocation : 返回
+
+' ═══════════════════════════════════════════════════════════════
+' Perception Pipeline
+' ═══════════════════════════════════════════════════════════════
+
+class DetectionNode <<rclcpp::Node>> {
+  - model_path_ : string
+  - confidence_threshold_ : float
+  - nms_threshold_ : float
+  --
+  + image_callback(Image) : void
+  - infer(Mat) : TargetArray
+  - load_model() : void
+}
+
+class MultiObjectTracker {
+  - tracks_ : map<int,Track>
+  - next_id_ : int
+  - max_age_ : int
+  - min_hits_ : int
+  - iou_threshold_ : float
+  --
+  + predict() : void
+  + update(TargetArray) : void
+  + get_tracks(timestamp, frame_id) : TargetArray
+  - compute_iou(Target, Target) : float
+  - associate() : void
+}
+
+class Track <<MultiObjectTracker::struct>> {
+  + id : int
+  + class_name : string
+  + kf : KalmanFilter
+  + age : int
+  + total_visible_count : int
+  + consecutive_invisible_count : int
+}
+
+class DepthEstimatorNode <<rclcpp::Node>> {
+  - fx_, fy_, cx_, cy_ : double
+  --
+  + depth_callback(Image) : void
+  + detection_callback(TargetArray) : void
+  - estimate_depth(Mat, bbox) : float
+  - compute_3d_position(Target, float) : void
+}
+
+class PerceptionPipeline <<rclcpp::Node, Composable>> {
+  - tracker_ : MultiObjectTracker
+  - calibrated_ : bool
+  --
+  + image_callback(Image) : void
+}
+
+MultiObjectTracker *-- Track
+PerceptionPipeline *-- MultiObjectTracker
+DetectionNode ..> MultiObjectTracker : 输出→输入
+
+' ═══════════════════════════════════════════════════════════════
+' Hardware Interfaces (Abstract Factory)
+' ═══════════════════════════════════════════════════════════════
+
+interface IChassisInterface {
+  + {abstract} init(device, baudrate) : bool
+  + {abstract} sendCommand(Twist) : void
+  + {abstract} readOdometry() : Odometry
+  + {abstract} emergencyStop() : void
+  + {abstract} shutdown() : void
+  + {abstract} isConnected() : bool
+  + {abstract} readBatteryVoltage() : float
+}
+
+interface IGimbalInterface {
+  + {abstract} init(can_if, can_id) : bool
+  + {abstract} sendCommand(GimbalCmd) : void
+  + {abstract} readState(yaw,pitch,yr,pr) : void
+  + {abstract} home() : void
+  + {abstract} emergencyStop() : void
+  + {abstract} shutdown() : void
+  + {abstract} isConnected() : bool
+}
+
+interface IIMUInterface {
+  + {abstract} init(device, baudrate) : bool
+  + {abstract} read() : Imu
+  + {abstract} isConnected() : bool
+  + {abstract} shutdown() : void
+}
+
+interface IOdometryInterface {
+  + {abstract} update(Twist, Imu, dt) : Odometry
+  + {abstract} reset() : void
+  + {abstract} getPose(x, y, yaw) : void
+}
+
+' Factory functions
+note bottom of IChassisInterface
+  Factory Functions:
+  make_lekiwi_chassis() → 实机串口
+  make_simulated_chassis() → 仿真内存
+  make_dji_rs2_gimbal() → 实机CAN
+  make_simulated_gimbal() → 仿真内存
+  make_bno055_imu() → 实机I2C
+  make_simulated_imu() → 仿真内存
+  make_omni_wheel_odometry() → 三轮全向里程计
+end note
+
+' ═══════════════════════════════════════════════════════════════
+' Kinematics & Utilities
+' ═══════════════════════════════════════════════════════════════
+
+class ThreeWheelOmniKinematics {
+  - wheel_radius_ : double
+  - base_radius_ : double
+  - wheel_angles_ : Vector3d
+  - M_inverse_ : Matrix3d
+  - M_forward_ : Matrix3d
+  --
+  + inverse(Vector3d) : Vector3d
+  + forward(Vector3d) : Vector3d
+  + getWheelRadius() : double
+  + getBaseRadius() : double
+}
+
+class DJIRS2Protocol <<utility>> {
+  {static} + DEFAULT_CAN_ID : uint32_t = 0x201
+  --
+  {static} + encodeVelocityCommand(yr,pr,hold) : CanFrame
+  {static} + computeChecksum(data) : uint8_t
+}
+
+class LowPassFilter <<utility>> {
+  - alpha_ : double
+  - value_ : double
+  --
+  + update(raw) : double
+  + reset() : void
+  + value() : double
+}
+
+' ═══════════════════════════════════════════════════════════════
+' Servo Manager Node
+' ═══════════════════════════════════════════════════════════════
+
+class ServoManagerNode <<rclcpp::Node>> {
+  - controller_loader_ : ClassLoader<ServoControllerBase>
+  - controller_ : shared_ptr<ServoControllerBase>
+  - allocator_ : ControlAllocator
+  - calibrated_ : bool
+  - servo_active_ : bool
+  - last_target_ : TargetArray
+  - last_platform_state_ : PlatformState
+  - last_control_time_ : Time
+  --
+  + control_loop() : void
+  + target_callback(TargetArray) : void
+  + platform_callback(PlatformState) : void
+  + camera_info_callback(CameraInfo) : void
+  + set_mode_callback(SetServoMode) : void
+  + execute_servo(VisualServo goal) : void
+}
+
+ServoManagerNode o-- ServoControllerBase : pluginlib加载
+ServoManagerNode o-- ControlAllocator
+
+' ═══════════════════════════════════════════════════════════════
+' Custom Messages (vision_servo_msgs)
+' ═══════════════════════════════════════════════════════════════
+
+class Target <<msg>> {
+  + id : int32
+  + class_name : string
+  + bbox : float32[4]
+  + center : float32[2]
+  + confidence : float32
+  + position : float32[3]
+  + velocity : float32[3]
+  + depth_confidence : float32
+}
+
+class TargetArray <<msg>> {
+  + header : Header
+  + targets : Target[]
+  + tracking_id : int32
+}
+
+class ServoState <<msg>> {
+  + state : uint8
+  + feature_error : float32[6]
+  + norm_error : float32
+  + condition_number : float32
+  + camera_velocity : float32[6]
+  + gimbal_velocity : float32[2]
+  + chassis_velocity : float32[3]
+  + convergence_rate : float32
+  + iteration_count : uint32
+}
+
+class PlatformState <<msg>> {
+  + chassis_pose : float32[3]
+  + chassis_velocity : float32[3]
+  + gimbal_yaw : float32
+  + gimbal_pitch : float32
+  + angular_velocity : float32[3]
+  + orientation : Quaternion
+  + emergency_stop : bool
+  + system_mode : uint8
+}
+
+class GimbalCmd <<msg>> {
+  + yaw_rate : float32
+  + pitch_rate : float32
+  + hold_yaw : bool
+  + hold_pitch : bool
+}
+
+TargetArray *-- Target
+
+@enduml

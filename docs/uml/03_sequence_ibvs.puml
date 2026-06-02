@@ -1,0 +1,103 @@
+@startuml fcr_sequence_ibvs
+' =============================================================================
+' FCR ROS2 Workspace — Sequence Diagram (IBVS Visual Servoing Flow)
+' =============================================================================
+
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam ParticipantPadding 10
+skinparam BoxPadding 5
+
+title IBVS 视觉伺服跟踪 — 完整时序流程
+
+actor "操作员" as op
+participant "ServoManager\n(servo_manager)" as mgr
+participant "IBVSController\n(pluginlib)" as ibvs
+participant "ControlAllocator" as alloc
+participant "ChassisDriver" as ch
+participant "GimbalDriver" as gim
+participant "PerceptionPipeline\n(检测→跟踪→深度)" as perc
+participant "Camera\n(RealSense/OAK-D)" as cam
+
+== 初始化阶段 ==
+
+op -> mgr : ros2 launch bringup_pkg fcr_bringup.launch.py
+activate mgr
+
+mgr -> mgr : 加载 controller_plugin\n(pluginlib: IBVSController)
+mgr -> ibvs : createSharedInstance("IBVSController")
+activate ibvs
+
+mgr -> alloc : configure(limits, ratio=0.5)
+activate alloc
+
+cam -> perc : /camera/image_raw (30Hz)
+activate perc
+
+perc -> perc : YOLO 推理 → 检测
+perc -> perc : ByteTrack 多目标跟踪
+perc -> perc : 深度估计 → 3D坐标
+
+perc -> mgr : /camera/camera_info\n(TRANSIENT_LOCAL, 一次性)
+mgr -> ibvs : initialize(fx,fy,cx,cy,640,480)
+ibvs --> mgr : true
+
+== 设置跟踪目标 ==
+
+op -> mgr : SetTrackingTarget\n(target_id=-1, enable=true)
+mgr --> op : success, assigned_id=0
+
+op -> mgr : SetServoMode(mode=IBVS)
+mgr --> op : success
+
+== 伺服跟踪循环 (50Hz) ==
+
+loop 每 20ms (50Hz)
+  perc -> mgr : /perception/targets_3d (TargetArray)
+  mgr -> ibvs : computeVelocity(target, dt)
+
+  activate ibvs
+  ibvs -> ibvs : 1. extractFeatures(target)\n  → [x1,y1,x2,y2,logArea,aspect]
+  ibvs -> ibvs : 2. feature_error = current - desired
+  ibvs -> ibvs : 3. if norm < tolerance → 收敛，返回零速度
+  ibvs -> ibvs : 4. L = computeInteractionMatrix(features, depth)\n  (6×6 图像雅可比矩阵)
+  ibvs -> ibvs : 5. v_cam = -λ × pinv(L) × error\n  (自适应增益 λ)
+  ibvs -> ibvs : 6. clampVelocity(v_cam)
+  ibvs --> mgr : camera_velocity[6]
+  deactivate ibvs
+
+  mgr -> alloc : allocate(camera_velocity, platform_state, dt)
+
+  activate alloc
+  alloc -> alloc : 旋转分量分配:\n  gimbal: vy × (1-ratio)\n  chassis: vz × ratio
+  alloc -> alloc : 平移分量: 全部给chassis
+  alloc -> alloc : 一阶低通平滑 (α=0.3)
+  alloc --> mgr : ControlAllocation{twist, yaw_rate, pitch_rate}
+  deactivate alloc
+
+  mgr -> ch : /cmd_vel (TwistStamped)
+  activate ch
+  ch -> ch : 安全限幅 (v≤1.0, ω≤2.0)
+  ch -> ch : 逆运动学 → 电机转速
+  deactivate ch
+
+  mgr -> gim : /cmd_gimbal (GimbalCmd)
+  activate gim
+  gim -> gim : DJI RS2 CAN帧编码\n(CAN ID 0x201)
+  deactivate gim
+
+  mgr -> mgr : publish /servo/state\n(误差, 雅可比条件数, 收敛速率)
+end
+
+== 收敛 ==
+
+ibvs -> ibvs : feature_error.norm() < tolerance
+mgr -> op : VisualServo Action Result\n(success=true, final_error=0.008)
+
+deactivate perc
+deactivate alloc
+deactivate ibvs
+deactivate mgr
+
+@enduml

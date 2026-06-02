@@ -1,0 +1,119 @@
+@startuml fcr_package_diagram
+' =============================================================================
+' FCR ROS2 Workspace — Package Dependency Diagram
+' =============================================================================
+
+skinparam packageStyle rectangle
+skinparam backgroundColor #FEFEFE
+skinparam packageBorderColor #333333
+skinparam arrowColor #555555
+
+package "vision_servo_msgs\n(rosidl — 消息/服务/动作)" as msgs #FFEEDD {
+  folder msg/ {
+    [Target]
+    [TargetArray]
+    [ServoState]
+    [PlatformState]
+    [GimbalCmd]
+  }
+  folder srv/ {
+    [SetTrackingTarget]
+    [SetServoMode]
+    [CalibrateCamera]
+  }
+  folder action/ {
+    [VisualServo]
+  }
+}
+
+package "perception_pkg\n(ament_cmake — 视觉感知)" as perception #DDEEFF {
+  component "DetectionNode\n(YOLO TensorRT)" as det
+  component "TrackingNode\n(SORT/ByteTrack)" as trk
+  component "DepthEstimatorNode\n(RGBD→3D)" as depth
+  component "PerceptionPipeline\n(可组合节点)" as pipe
+  det --> trk : TargetArray
+  trk --> depth : TargetArray
+}
+
+package "servo_control_pkg\n(ament_cmake — 视觉伺服控制)" as servo #DDFFDD {
+  component "ServoControllerBase\n<<abstract>>" as base
+  component "IBVSController\n(图像雅可比)" as ibvs
+  component "PBVSController\n(位姿误差)" as pbvs
+  component "MPCController\n(模型预测)" as mpc
+  component "RLController\n(强化学习)" as rl
+  component "ControlAllocator\n(控制分配)" as alloc
+  component "ServoManagerNode\n(主控节点)" as mgr
+
+  ibvs -up-> base : extends
+  pbvs -up-> base : extends
+  mpc -up-> base : extends
+  rl -up-> base : extends
+  mgr --> base : pluginlib加载
+  mgr --> alloc
+}
+
+package "robot_platform_pkg\n(ament_cmake — 硬件接口)" as platform #FFDDDD {
+  component "IChassisInterface\n<<interface>>" as ch_if
+  component "IGimbalInterface\n<<interface>>" as gim_if
+  component "IIMUInterface\n<<interface>>" as imu_if
+  component "IOdometryInterface\n<<interface>>" as odm_if
+
+  component "ChassisDriverNode\n(LEKIWI三轮全向)" as ch_drv
+  component "GimbalDriverNode\n(DJI RS2 CAN)" as gim_drv
+  component "IMUDriverNode\n(BNO055)" as imu_drv
+  component "OdometryNode\n(EKF/轮速)" as odm_node
+  component "PlatformManagerNode\n(状态聚合)" as plat_mgr
+
+  ch_drv -up-> ch_if : implements
+  gim_drv -up-> gim_if : implements
+  imu_drv -up-> imu_if : implements
+  odm_node -up-> odm_if : implements
+}
+
+package "simulation_pkg\n(ament_cmake — 仿真)" as sim #EEEEFF {
+  component "Gazebo World" as gazebo
+  component "URDF/xacro\n(lekiwi_full)" as urdf
+  component "TargetSimulator\n(运动目标)" as tgt_sim
+  component "CameraSimulator\n(虚拟相机)" as cam_sim
+}
+
+package "bringup_pkg\n(ament_cmake — 一键启动)" as bringup #FFFFDD {
+  component "fcr_bringup.launch.py\n(实机)" as real_launch
+  component "fcr_sim_bringup.launch.py\n(仿真)" as sim_launch
+  component "fcr_debug.launch.py\n(调试)" as debug_launch
+}
+
+' ── Dependencies ──
+msgs <.. perception : depend
+msgs <.. servo     : depend
+msgs <.. platform  : depend
+
+perception <.. bringup : exec_depend
+servo     <.. bringup : exec_depend
+platform  <.. bringup : exec_depend
+sim       <.. bringup : exec_depend
+
+bringup ..> sim : IncludeLaunchDescription
+bringup ..> perception : IncludeLaunchDescription
+bringup ..> servo : IncludeLaunchDescription
+bringup ..> platform : IncludeLaunchDescription
+
+' ── Runtime data flow ──
+perception ..> servo : /perception/targets_3d
+servo     ..> platform : /cmd_vel, /cmd_gimbal
+platform  ..> servo : /platform/state
+sim       ..> perception : /camera/image_raw (仿真)
+
+note bottom of msgs
+  ★ 消息定义独立包
+  被所有功能包依赖
+  仅依赖ROS2核心消息包
+end note
+
+note bottom of servo
+  ★ pluginlib可扩展架构
+  运行时热切换控制器
+  支持论文扩展(MPC/RL)
+end note
+
+@enduml

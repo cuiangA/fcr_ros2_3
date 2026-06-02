@@ -1,0 +1,25 @@
+# Build artifacts
+build/
+install/
+log/
+
+# IDE
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Colcon test results
+build/*/test_results/
+
+# ROS bags
+*.db3
+*.mcap

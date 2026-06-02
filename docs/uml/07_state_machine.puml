@@ -1,0 +1,84 @@
+@startuml fcr_state_machine
+' =============================================================================
+' FCR ROS2 Workspace — State Machine Diagram (Servo Lifecycle)
+' =============================================================================
+
+skinparam backgroundColor #FEFEFE
+skinparam stateBorderColor #333333
+skinparam stateBackgroundColor #EEF5FF
+
+title VisualServo Action — 状态机 (State Machine)
+
+[*] --> IDLE
+
+state "IDLE\n(空闲)" as IDLE #LightGray {
+  state "等待目标\nwaiting_for_target" as wait_target
+  state "等待指令\nwaiting_for_command" as wait_cmd
+}
+
+state "CONVERGING\n(收敛中)" as CONVERGING #LightBlue {
+  state "计算雅可比\ncompute_jacobian" as comp_jac
+  state "计算控制律\ncompute_control" as comp_ctrl
+  state "发布指令\npublish_cmds" as pub_cmd
+
+  comp_jac --> comp_ctrl : L_s, cond(L)
+  comp_ctrl --> pub_cmd : v_cam = -λ·pinv(L)·e
+  pub_cmd --> comp_jac : 下一帧
+}
+
+state "TRACKING\n(跟踪中/已收敛)" as TRACKING #LightGreen
+state "LOST\n(目标丢失)" as LOST #Orange
+state "ERROR\n(错误)" as ERROR #Red
+
+' ── Transitions ──
+
+IDLE --> CONVERGING : VisualServo Action Goal\n+ 目标出现
+
+CONVERGING --> TRACKING : ||e|| < tolerance\n(已收敛)
+
+CONVERGING --> LOST : 目标超出视野\n或跟踪ID失效
+CONVERGING --> ERROR : cond(L) > threshold\n(雅可比奇异)
+
+TRACKING --> CONVERGING : 目标移动\n||e|| > tolerance
+
+TRACKING --> LOST : 目标丢失
+
+LOST --> CONVERGING : 目标重新出现\n(Re-ID匹配成功)
+
+LOST --> IDLE : 超时(timeout)\n或 Action Cancel
+
+ERROR --> IDLE : 重置/恢复
+
+IDLE --> [*] : Action Result\n(success/failure)
+
+note right of CONVERGING
+  <b>IBVS 控制循环 (50Hz)</b>
+  1. extractFeatures(target)
+  2. e = s - s*
+  3. L = interactionMatrix(s, Z)
+  4. v = -λ · L⁺ · e
+  5. allocate(v) → chassis + gimbal
+end note
+
+note right of ERROR
+  <b>雅可比奇异常见原因:</b>
+  · 目标在图像边缘
+  · 深度估计为0
+  · 3个特征点共线
+  · 目标距离太远(Z→∞)
+
+  <b>恢复策略:</b>
+  · 降级为速度保持
+  · 通知操作员
+  · 可切换到PBVS模式
+end note
+
+note right of LOST
+  <b>丢失恢复策略:</b>
+  · ByteTrack保留ID N帧
+  · 扩大搜索区域
+  · 降低置信度阈值
+  · 回退到检测模式
+end note
+
+@enduml

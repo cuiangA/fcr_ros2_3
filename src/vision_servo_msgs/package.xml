@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <!--
+  @file package.xml
+  @brief vision_servo_msgs 包清单文件。
+
+  该包是 FCR 视觉伺服系统的通信接口定义包，包含：
+    - 5 个自定义消息（Target, TargetArray, ServoState, PlatformState, GimbalCmd）
+    - 3 个服务（SetTrackingTarget, SetServoMode, CalibrateCamera）
+    - 1 个动作（VisualServo，用于长周期伺服任务）
+
+  所有其他功能包通过依赖此包获得统一的类型定义，
+  确保跨包通信的一致性和类型安全性。
+
+  @note member_of_group rosidl_interface_packages 是必须声明的，
+        否则 ros2 pkg list 不会将此包识别为接口包。
+  -->
+
+  <name>vision_servo_msgs</name>
+  <version>0.1.0</version>
+  <description>视觉伺服移动机器人的自定义消息、服务和动作接口定义</description>
+  <maintainer email="dev@fcr-project.org">FCR Dev Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- 构建工具依赖：ament_cmake 提供 CMake 宏 -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 构建时依赖：rosidl_default_generators 提供代码生成工具 -->
+  <build_depend>rosidl_default_generators</build_depend>
+  <!-- 运行时依赖：rosidl_default_runtime 提供运行时类型支持 -->
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <!-- 声明为 rosidl 接口包组成员，使 ros2 pkg list 正确识别 -->
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <!--
+  接口依赖（depend = build_depend + exec_depend）：
+    - std_msgs：        基础消息类型（Header, String 等）
+    - geometry_msgs：   几何消息类型（Pose, Twist, Vector3 等）
+    - sensor_msgs：     传感器消息类型（Image, CameraInfo 等）
+    - action_msgs：     动作消息基类（Goal, Result, Feedback）
+    - builtin_interfaces：内置时间类型（Duration, Time）
+  -->
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>action_msgs</depend>
+  <depend>builtin_interfaces</depend>
+
+  <export>
+    <!-- 声明构建类型为 ament_cmake，确保 colcon 使用正确的构建后端 -->
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

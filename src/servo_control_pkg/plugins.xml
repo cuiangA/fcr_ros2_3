@@ -1,0 +1,27 @@
+<!--
+  @file plugins.xml
+  @brief pluginlib 插件注册文件 — 声明可动态加载的视觉伺服控制器。
+
+  每个 <library> 元素指定一个共享库（.so/.dll）及其中导出的类。
+  pluginlib 在运行时通过此文件发现和加载插件，实现控制器的热切换。
+
+  新增控制器时，需要：
+    1. 创建继承 ServoControllerBase 的类
+    2. 在 .cpp 文件中调用 PLUGINLIB_EXPORT_CLASS 宏
+    3. 在此文件中添加对应的 <library> 条目
+    4. 在 CMakeLists.txt 中添加对应的共享库构建目标
+-->
+
+<library path="ibvs_controller">
+  <class type="servo_control_pkg::IBVSController"
+         base_class_type="servo_control_pkg::ServoControllerBase">
+    <description>基于图像的视觉伺服（IBVS）控制器 — 直接在图像特征空间中计算控制律</description>
+  </class>
+</library>
+
+<library path="pbvs_controller">
+  <class type="servo_control_pkg::PBVSController"
+         base_class_type="servo_control_pkg::ServoControllerBase">
+    <description>基于位置的视觉伺服（PBVS）控制器 — 重建 3D 位姿后在笛卡尔空间中计算控制律</description>
+  </class>
+</library>

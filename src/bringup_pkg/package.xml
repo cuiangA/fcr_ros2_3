@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>bringup_pkg</name>
+  <version>0.1.0</version>
+  <!-- 一键启动包：生产模式与仿真模式下统一启动 FCR 视觉伺服系统 -->
+  <description>One-click bringup for FCR visual servoing system (production + simulation)</description>
+  <maintainer email="dev@fcr-project.org">FCR Dev Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- 构建依赖：纯启动包仅需 ament_cmake -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 运行时依赖：启动文件会引用这些包的节点和资源 -->
+  <exec_depend>perception_pkg</exec_depend>
+  <exec_depend>servo_control_pkg</exec_depend>
+  <exec_depend>robot_platform_pkg</exec_depend>
+  <exec_depend>vision_servo_msgs</exec_depend>
+  <exec_depend>rclcpp_components</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

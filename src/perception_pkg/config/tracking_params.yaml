@@ -1,0 +1,8 @@
+# perception_pkg/config/tracking_params.yaml
+# 多目标跟踪节点参数（SORT/ByteTrack 风格卡尔曼滤波跟踪器）
+tracking_node:
+  ros__parameters:
+    max_age: 30        # 轨迹存活最大帧数（超时未检测到则删除该轨迹）
+    min_hits: 3        # 轨迹确认所需的最小连续命中帧数（防止虚假检测）
+    iou_threshold: 0.3 # 检测框与轨迹预测框关联的 IoU 阈值（低于此值视为不匹配）
+    camera_frame: "camera_link"  # 相机在 TF 树中的坐标系名称

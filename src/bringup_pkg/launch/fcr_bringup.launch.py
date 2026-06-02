@@ -1,0 +1,105 @@
+# bringup_pkg/launch/fcr_bringup.launch.py
+"""
+FCR 生产环境一键启动文件。
+
+启动顺序（分阶段定时启动，确保依赖就绪）：
+  1. t=0s:  机器人平台（底盘/云台/IMU/里程计硬件驱动）
+  2. t=2s:  感知管线（检测 + 跟踪 + 深度估计）—— 等待相机驱动就绪
+  3. t=3s:  伺服控制 —— 等待感知输出 + 平台状态反馈就绪
+  4. t=4s:  可视化（RViz2 + Foxglove Bridge，可选）
+
+用法：
+  ros2 launch bringup_pkg fcr_bringup.launch.py use_sim:=false use_rviz:=true
+"""
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, GroupAction
+)
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+
+
+def generate_launch_description():
+    # ── 启动配置参数 ──────────────────────────────────────────
+    use_sim = LaunchConfiguration("use_sim")
+    controller_plugin = LaunchConfiguration("controller_plugin")
+    conf_threshold = LaunchConfiguration("confidence_threshold")
+    use_composition = LaunchConfiguration("use_composition")
+
+    # 各包的共享目录，用于引用 launch 文件
+    pkg_share = FindPackageShare("bringup_pkg")
+    perception_share = FindPackageShare("perception_pkg")
+    servo_share = FindPackageShare("servo_control_pkg")
+    platform_share = FindPackageShare("robot_platform_pkg")
+
+    # ── 1. 机器人平台（硬件驱动层） ─────────────────────────
+    platform_launch = IncludeLaunchDescription(
+        PathJoinSubstitution([platform_share, "launch", "platform.launch.py"]),
+        launch_arguments={"use_sim": use_sim}.items(),
+    )
+
+    # ── 2. 感知管线 ─────────────────────────────────────────
+    perception_launch = IncludeLaunchDescription(
+        PathJoinSubstitution([perception_share, "launch", "perception.launch.py"]),
+        launch_arguments={
+            "use_composition": use_composition,
+            "confidence_threshold": conf_threshold,
+        }.items(),
+    )
+
+    # ── 3. 伺服控制 ─────────────────────────────────────────
+    servo_launch = IncludeLaunchDescription(
+        PathJoinSubstitution([servo_share, "launch", "servo_control.launch.py"]),
+        launch_arguments={
+            "controller_plugin": controller_plugin,
+        }.items(),
+    )
+
+    # ── 4. RViz2（可选可视化） ──────────────────────────────
+    rviz_node = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="rviz2",
+        arguments=["-d", PathJoinSubstitution([pkg_share, "rviz", "fcr_system.rviz"])],
+        condition=LaunchConfiguration("use_rviz"),
+    )
+
+    # ── 5. Foxglove Bridge（可选 WebSocket 可视化） ────────
+    foxglove_node = Node(
+        package="foxglove_bridge",
+        executable="foxglove_bridge",
+        name="foxglove_bridge",
+        parameters=[{"port": 8765, "max_qos_depth": 10}],
+        condition=LaunchConfiguration("use_foxglove"),
+    )
+
+    # 分阶段启动：平台 → 感知 → 控制 → 可视化
+    # 使用 TimerAction 确保前置节点已就绪
+    return LaunchDescription([
+        DeclareLaunchArgument("use_sim", default_value="false",
+                              description="是否启用仿真模式"),
+        DeclareLaunchArgument("controller_plugin",
+                              default_value="servo_control_pkg::IBVSController",
+                              description="视觉伺服控制器插件类名"),
+        DeclareLaunchArgument("confidence_threshold", default_value="0.5",
+                              description="YOLO 检测置信度阈值"),
+        DeclareLaunchArgument("use_composition", default_value="true",
+                              description="是否启用进程内可组合节点（零拷贝）"),
+        DeclareLaunchArgument("use_rviz", default_value="false",
+                              description="是否启动 RViz2"),
+        DeclareLaunchArgument("use_foxglove", default_value="false",
+                              description="是否启动 Foxglove WebSocket 桥接"),
+
+        # 阶段 1：平台驱动 (t=0s)
+        platform_launch,
+
+        # 阶段 2：感知管线 (t=2s，等待相机驱动就绪)
+        TimerAction(period=2.0, actions=[perception_launch]),
+
+        # 阶段 3：伺服控制 (t=3s，等待感知输出 + 平台状态)
+        TimerAction(period=3.0, actions=[servo_launch]),
+
+        # 可视化 (t=4s)
+        TimerAction(period=4.0, actions=[rviz_node, foxglove_node]),
+    ])

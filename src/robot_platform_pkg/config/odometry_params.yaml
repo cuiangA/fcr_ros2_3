@@ -1,0 +1,9 @@
+# robot_platform_pkg/config/odometry_params.yaml
+# 里程计节点参数
+odometry_node:
+  ros__parameters:
+    wheel_radius: 0.05           # 全向轮半径 (m)
+    base_radius: 0.15            # 底盘半径 (m)
+    odom_frame: "odom"           # 里程计坐标系（全局参考系）
+    base_frame: "base_link"      # 机器人本体坐标系
+    publish_rate: 50.0           # 里程计发布频率 (Hz)

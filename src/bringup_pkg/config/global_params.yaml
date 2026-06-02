@@ -1,0 +1,28 @@
+# bringup_pkg/config/global_params.yaml
+# 全局主配置文件 — 启动时由所有节点共同加载
+# 各子系统的详细参数见各自包内的 config/ 目录
+
+# ── 系统级配置 ──────────────────────────────────────────────
+system:
+  robot_name: "lekiwi"        # 机器人名称，用于命名空间与多机器人隔离
+  use_sim_time: false         # true = 使用 /clock 仿真时间，生产环境必须为 false
+  control_rate: 50.0          # 主控制回路频率 (Hz)
+
+# ── 感知子系统 ──────────────────────────────────────────────
+perception:
+  model_path: "/models/yolov8n.onnx"  # YOLOv8 模型文件路径
+  confidence_threshold: 0.5           # 检测置信度阈值（低于此值的检测结果被丢弃）
+  use_composition: true               # 启用进程内组件模式，零拷贝传输图像
+
+# ── 伺服控制子系统 ─────────────────────────────────────────
+servo:
+  controller_plugin: "servo_control_pkg::IBVSController"  # 默认控制器插件（IBVS）
+  allocation_ratio: 0.5   # 底盘 vs 云台的运动分配比例（0=纯云台，1=纯底盘）
+  lambda_gain: 0.5        # IBVS 控制增益 λ（指数收敛速率）
+
+# ── 机器人平台子系统 ───────────────────────────────────────
+platform:
+  max_linear_velocity: 1.0    # 底盘最大线速度 (m/s)
+  max_angular_velocity: 2.0   # 底盘最大角速度 (rad/s)
+  gimbal_yaw_limit: 3.14159   # 云台偏航角限位 ±π rad
+  gimbal_pitch_limit: 1.5708  # 云台俯仰角限位 ±π/2 rad

@@ -1,0 +1,11 @@
+# perception_pkg/config/detection_params.yaml
+# YOLO 目标检测节点参数
+detection_node:
+  ros__parameters:
+    model_path: "/models/yolov8n.onnx"  # ONNX 模型文件路径（n=nano，适合嵌入式/边缘设备）
+    model_type: "yolov8"                # 模型类型：yolov8, yolov5, tensorrt
+    device: "cuda:0"                    # 推理设备：cuda:0（GPU）或 cpu
+    confidence_threshold: 0.5           # 置信度阈值（低于此值的检测结果被丢弃）
+    nms_threshold: 0.45                 # NMS（非极大值抑制）IoU 阈值
+    class_names: ["person", "car", "bicycle", "motorcycle"]  # 需要检测的目标类别列表
+    camera_frame: "camera_link"         # 相机在 TF 树中的坐标系名称

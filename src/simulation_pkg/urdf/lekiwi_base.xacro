@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<!-- LEKIWI Base Chassis: 3-wheel omnidirectional mobile platform -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="lekiwi_base" params="parent:=base_link prefix:=''">
+    <!-- Base link -->
+    <link name="${prefix}base_link">
+      <visual>
+        <geometry>
+          <cylinder radius="0.2" length="0.1"/>
+        </geometry>
+        <material name="dark_grey">
+          <color rgba="0.3 0.3 0.3 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <cylinder radius="0.2" length="0.1"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="15.0"/>
+        <inertia ixx="0.15" iyy="0.15" izz="0.25" ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+    </link>
+
+    <!-- Omni wheels (3x, at 120° intervals) -->
+    <xacro:macro name="omni_wheel" params="name angle">
+      <link name="${prefix}${name}_wheel">
+        <visual>
+          <geometry>
+            <cylinder radius="0.05" length="0.02"/>
+          </geometry>
+          <material name="black">
+            <color rgba="0.1 0.1 0.1 1.0"/>
+          </material>
+        </visual>
+        <collision>
+          <geometry>
+            <cylinder radius="0.05" length="0.02"/>
+          </geometry>
+        </collision>
+        <inertial>
+          <mass value="0.2"/>
+          <inertia ixx="1e-4" iyy="1e-4" izz="2e-4" ixy="0" ixz="0" iyz="0"/>
+        </inertial>
+      </link>
+
+      <joint name="${prefix}${name}_wheel_joint" type="continuous">
+        <parent link="${prefix}base_link"/>
+        <child link="${prefix}${name}_wheel"/>
+        <origin xyz="${0.15 * cos(angle)} ${0.15 * sin(angle)} -0.04" rpy="0 0 0"/>
+        <axis xyz="0 1 0"/>
+      </joint>
+    </xacro:macro>
+
+    <xacro:omni_wheel name="front" angle="${0}"/>
+    <xacro:omni_wheel name="left" angle="${2*pi/3}"/>
+    <xacro:omni_wheel name="right" angle="${4*pi/3}"/>
+
+    <!-- IMU link -->
+    <link name="${prefix}imu_link">
+      <inertial>
+        <mass value="0.01"/>
+        <inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+    </link>
+    <joint name="${prefix}imu_joint" type="fixed">
+      <parent link="${prefix}base_link"/>
+      <child link="${prefix}imu_link"/>
+      <origin xyz="0 0 0.05" rpy="0 0 0"/>
+    </joint>
+
+  </xacro:macro>
+</robot>

@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <!--
+  @file package.xml
+  @brief servo_control_pkg 包清单文件。
+
+  视觉伺服控制包，实现基于 pluginlib 的可插拔控制器架构：
+    - IBVS（基于图像的视觉伺服）：直接在图像特征空间操作
+    - PBVS（基于位置的视觉伺服）：重建 3D 位姿后在笛卡尔空间操作
+    - MPC（模型预测控制）[论文扩展占位]
+    - RL（强化学习控制）[论文扩展占位]
+
+  所有控制器继承 ServoControllerBase 基类，通过 plugins.xml 注册。
+  运行时可通过 SetServoMode 服务热切换控制器插件。
+
+  控制分配器（ControlAllocator）将相机坐标系的速度指令分解为
+  底盘（Twist）和云台（GimbalCmd）两个执行器的协调控制指令。
+  -->
+
+  <name>servo_control_pkg</name>
+  <version>0.1.0</version>
+  <description>视觉伺服控制器：IBVS、PBVS、MPC、RL 及控制分配器</description>
+  <maintainer email="dev@fcr-project.org">FCR Dev Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>vision_servo_msgs</depend>       <!-- ServoState, PlatformState, TargetArray -->
+  <depend>geometry_msgs</depend>           <!-- Twist, Vector3, Pose -->
+  <depend>sensor_msgs</depend>             <!-- CameraInfo -->
+  <depend>tf2_ros</depend>                 <!-- 坐标变换 -->
+  <depend>tf2_geometry_msgs</depend>
+  <depend>Eigen3</depend>                  <!-- 线性代数（交互矩阵、伪逆） -->
+  <depend>pluginlib</depend>               <!-- 动态控制器插件加载 -->
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

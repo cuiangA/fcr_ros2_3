@@ -1,0 +1,102 @@
+@startuml fcr_activity_servo
+' =============================================================================
+' FCR ROS2 Workspace — Activity Diagram (Servo Control Loop)
+' =============================================================================
+
+skinparam backgroundColor #FEFEFE
+skinparam activityBorderColor #333333
+skinparam activityBackgroundColor #EEF5FF
+
+title 视觉伺服控制循环 — Activity Diagram (50Hz)
+
+start
+
+:系统启动 (bringup_pkg 分层启动);
+
+fork
+  :**Phase 1 (t=0s)**\nPlatform Drivers 启动\n(Chassis + Gimbal + IMU);
+fork again
+  :**Phase 2 (t=2s)**\nPerception Pipeline 启动\n(YOLO + ByteTrack + Depth);
+fork again
+  :**Phase 3 (t=3s)**\nServo Manager 启动\n(pluginlib 加载控制器);
+end fork
+
+:等待 CameraInfo (TRANSIENT_LOCAL);
+:controller.initialize(fx,fy,cx,cy,w,h);
+
+:操作员设置跟踪目标\nSetTrackingTarget(id=-1);
+:操作员选择伺服模式\nSetServoMode(mode=IBVS);
+
+:发送 VisualServo Action Goal;
+
+partition "50Hz 控制循环 (Callback Group 3)" {
+
+  repeat
+    :接收 /perception/targets_3d;
+
+    if (跟踪目标是否有效?) then (no)
+      :state = LOST;
+      :发布零速度指令;
+      :publish ServoState;
+    else (yes)
+      :提取当前特征向量\ns = [x1,y1,x2,y2,log(area),aspect];
+
+      :计算特征误差\ne = s_current - s_desired;
+
+      :计算误差范数\n||e||;
+
+      if (||e|| < tolerance?) then (yes)
+        :state = TRACKING\n(已收敛);
+        :v_camera = [0,0,0,0,0,0];
+      else (no)
+
+        :计算图像雅可比矩阵 L_s\n(6×6 interaction matrix);
+
+        :计算条件数 cond(L)\n检测奇异性;
+
+        if (cond(L) > threshold?) then (yes)
+          :state = ERROR\n雅可比奇异;
+          :降级为速度保持;
+        else (no)
+
+          :计算自适应增益 λ\nλ = f(||e||);
+
+          :IBVS控制律:\nv_cam = -λ · pinv(L) · e;
+
+          :速度限幅\n|v_linear| ≤ 1.0 m/s\n|v_angular| ≤ 2.0 rad/s;
+
+        endif
+      endif
+
+      :**控制分配 (ControlAllocator)**;
+
+      fork
+        :**Gimbal (高频角速度)**\nyaw_rate = wz · (1-ratio)\npitch_rate = wy · (1-ratio);
+        :一阶低通平滑 (α=0.3);
+        :编码DJI RS2 CAN帧;
+        :发布 /cmd_gimbal;
+      fork again
+        :**Chassis (低频平动)**\nvx, vy = 平移分量\nomega = wz · ratio;
+        :安全限幅;
+        :发布 /cmd_vel;
+      end fork
+
+      :发布 /servo/state (ServoState)\n· feature_error\n· condition_number\n· convergence_rate;
+
+      :发布 Action Feedback\nprogress = 1 - ||e||/||e_initial||;
+    endif
+
+  repeat while (VisualServo action active?)
+
+}
+
+:Action 完成;
+if (成功收敛?) then (yes)
+  :Result: success=true\nfinal_error = ||e||;
+else (no)
+  :Result: success=false\n(超时/丢失/奇异);
+endif
+
+stop
+
+@enduml

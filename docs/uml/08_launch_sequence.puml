@@ -1,0 +1,118 @@
+@startuml fcr_launch_sequence
+' =============================================================================
+' FCR ROS2 Workspace — Launch Sequence Diagram
+' =============================================================================
+
+skinparam backgroundColor #FEFEFE
+skinparam sequenceMessageAlign center
+
+title Launch Architecture — 启动时序 & 分层依赖
+
+participant "bringup_pkg\nfcr_bringup.launch.py" as bringup
+participant "robot_platform\nplatform.launch.py" as platform
+participant "perception_pkg\nperception.launch.py" as perception
+participant "servo_control\nservo_control.launch.py" as servo
+
+== Phase 0: 参数解析 ==
+
+bringup -> bringup : 解析 launch args:\n· use_sim: bool\n· controller_plugin: string\n· confidence_threshold: float\n· use_composition: bool
+
+== Phase 1: t=0s — 硬件驱动 ==
+
+bringup -> platform : IncludeLaunchDescription\nplatform.launch.py (use_sim)
+activate platform
+
+platform -> platform : ChassisDriverNode\n· use_sim ? SimulatedChassis : LekiwiChassis
+platform -> platform : GimbalDriverNode\n· use_sim ? SimulatedGimbal : DJIRS2Gimbal
+platform -> platform : IMUDriverNode\n· use_sim ? SimulatedIMU : BNO055IMU
+platform -> platform : OdometryNode\n(真实里程计 — 无仿真)
+platform -> platform : PlatformManagerNode\n(聚合状态 → /platform/state)
+
+platform --> bringup : 5 nodes started
+deactivate platform
+
+note right #LightGreen
+  <b>Phase 1 完成后可用:</b>
+  /odom
+  /imu/data
+  /platform/state (TRANSIENT_LOCAL)
+  /tf
+end note
+
+== Phase 2: t=2s — 感知流水线 ==
+
+bringup -> perception : TimerAction(2.0s)\nIncludeLaunchDescription\nperception.launch.py
+activate perception
+
+alt use_composition=true
+  perception -> perception : ComposableNodeContainer\n(component_container_mt)
+
+  perception -> perception : PerceptionPipeline\n(Detection+Tracking+Depth)\nintra-process 零拷贝
+else use_composition=false
+  perception -> perception : DetectionNode (standalone)
+  perception -> perception : TrackingNode (standalone)
+  perception -> perception : DepthEstimatorNode (standalone)
+end
+
+perception --> bringup : perception pipeline ready
+deactivate perception
+
+note right #LightBlue
+  <b>Phase 2 完成后可用:</b>
+  /perception/detections
+  /perception/tracks
+  /perception/targets_3d
+  /perception/set_tracking_target (service)
+end note
+
+== Phase 3: t=3s — 伺服控制 ==
+
+bringup -> servo : TimerAction(3.0s)\nIncludeLaunchDescription\nservo_control.launch.py
+activate servo
+
+servo -> servo : ServoManagerNode\n· 加载 pluginlib 控制器
+servo -> servo : pluginlib ClassLoader\n· createSharedInstance(plugin_name)
+
+alt controller_plugin = "IBVSController"
+  servo -> servo : IBVSController::initialize()\n等待 CameraInfo...
+else controller_plugin = "PBVSController"
+  servo -> servo : PBVSController::initialize()
+end
+
+servo -> servo : VelocityCommanderNode\n(备用 — 速度转发)
+
+servo --> bringup : servo control ready
+deactivate servo
+
+note right #LightYellow
+  <b>Phase 3 完成后可用:</b>
+  /cmd_vel (TwistStamped)
+  /cmd_gimbal (GimbalCmd)
+  /servo/state (ServoState)
+  /servo/set_mode (Service)
+  /servo/visual_servo (Action)
+end note
+
+== Phase 4: t=4s — 可视化 (可选) ==
+
+opt use_rviz=true
+  bringup -> bringup : RViz2\n加载 fcr_system.rviz
+end
+
+opt use_foxglove=true
+  bringup -> bringup : Foxglove Bridge\nWebSocket :8765
+end
+
+== 系统就绪 ==
+
+bringup -> bringup : 全部子系统启动完成\nTopic Graph 连通
+
+note over bringup #LightGreen
+  <b>系统就绪信号:</b>
+  · 所有节点正常运行
+  · DDS Discovery 完成
+  · QoS 匹配验证通过
+  · 可发送 VisualServo Action Goal
+end note
+
+@enduml

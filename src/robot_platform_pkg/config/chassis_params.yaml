@@ -1,0 +1,12 @@
+# robot_platform_pkg/config/chassis_params.yaml
+# LEKIWI 三全向轮底盘参数
+chassis_driver:
+  ros__parameters:
+    use_sim: false                   # true = 仿真模式，无需串口硬件
+    serial_device: "/dev/ttyUSB0"    # 底盘串口设备路径（Linux udev 规则可固定此名称）
+    baudrate: 115200                 # 串口波特率（与固件匹配）
+    max_linear_velocity: 1.0         # 最大线速度限制 (m/s)，防止飞车
+    max_angular_velocity: 2.0        # 最大角速度限制 (rad/s)
+    wheel_radius: 0.05               # 全向轮半径 (m)，用于运动学解算
+    base_radius: 0.15                # 底盘半径（轮心到几何中心距离，m）
+    enable_emergency_stop: true      # 启用急停检测（丢失控制信号时自动停车）

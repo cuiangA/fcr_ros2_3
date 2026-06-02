@@ -1,0 +1,19 @@
+# VisualServo.action — Long-running visual servoing task
+# ====== Goal ======
+int32 target_id                    # -1 for auto-select
+string class_name                  # Empty = any
+float32 desired_depth              # Desired distance to target (m), -1 = maintain current
+float32 feature_tolerance          # Convergence tolerance (normalized feature error)
+builtin_interfaces/Duration timeout
+---
+# ====== Result ======
+bool success
+string message
+float32 final_error                # Feature error at completion
+float32 elapsed_time               # Total servo time (seconds)
+---
+# ====== Feedback ======
+float32 progress                   # 0.0 - 1.0 (1.0 = converged)
+float32 current_error              # Current feature error
+float32[6] camera_velocity         # Current control output
+uint8 servo_state                  # IDLE/CONVERGING/TRACKING/LOST/ERROR

@@ -1,0 +1,8 @@
+# robot_platform_pkg/config/imu_params.yaml
+# BNO055 IMU 参数
+imu_driver:
+  ros__parameters:
+    use_sim: false              # true = 仿真模式，无需 I2C 硬件
+    device: "/dev/i2c-1"        # I2C 总线设备路径
+    rate_hz: 100.0              # IMU 数据发布频率 (Hz)
+    frame_id: "imu_link"        # TF 坐标系名称

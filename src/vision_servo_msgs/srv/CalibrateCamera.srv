@@ -1,0 +1,7 @@
+# CalibrateCamera.srv — Trigger camera intrinsic/extrinsic calibration
+string calibration_type            # "intrinsic", "extrinsic", "hand_eye"
+string target_pattern              # "chessboard", "charuco", "apriltag"
+---
+bool success
+string message
+string calibration_file            # Path to saved calibration YAML

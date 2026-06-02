@@ -1,0 +1,162 @@
+@startuml fcr_component_diagram
+' =============================================================================
+' FCR ROS2 Workspace — Component Diagram (ROS2 Nodes & Topics)
+' =============================================================================
+
+skinparam componentStyle rectangle
+skinparam backgroundColor #FEFEFE
+skinparam componentBorderColor #333333
+skinparam nodeBorderColor #555555
+skinparam interfaceBorderColor #2196F3
+
+title FCR 视觉伺服系统 — Component & Connector 图
+
+' ═══════════════════════════════════════════════════════════════
+' Nodes
+' ═══════════════════════════════════════════════════════════════
+
+node "Camera Driver\n(RealSense / OAK-D)" as cam {
+  interface "image_raw" as cam_img
+  interface "camera_info" as cam_info
+  interface "depth_raw" as cam_depth
+}
+
+package "perception_pkg" as perception_scope #DDEEFF {
+
+  component "DetectionNode\n(YOLO TensorRT)\n30Hz" as det {
+    portin "image" as det_in
+    portout "detections" as det_out
+  }
+
+  component "TrackingNode\n(SORT/ByteTrack)\n30Hz" as trk {
+    portin "det_in" as trk_in
+    portout "tracks" as trk_out
+  }
+
+  component "DepthEstimatorNode\n(RGBD→3D)\n30Hz" as depth_node {
+    portin "depth_in" as depth_img_in
+    portin "tracks_in" as depth_trk_in
+    portout "targets_3d" as depth_out
+  }
+
+  component "PerceptionPipeline\n(ComposableNode)\n[intra-process]" as pipe {
+    portin "image" as pipe_img
+    portin "depth" as pipe_depth
+    portout "detections" as pipe_det
+    portout "tracks" as pipe_trk
+    portout "targets_3d" as pipe_3d
+  }
+}
+
+package "servo_control_pkg" as servo_scope #DDFFDD {
+
+  component "ServoManagerNode\n(50Hz 控制循环)" as mgr {
+    portin "target_sub" as mgr_target
+    portin "plat_state" as mgr_plat
+    portin "cam_info" as mgr_cinfo
+    portout "cmd_vel" as mgr_cvel
+    portout "cmd_gimbal" as mgr_cgim
+    portout "servo_state" as mgr_state
+  }
+
+  component "<<pluginlib>>\nIBVSController" as ibvs_comp
+  component "<<pluginlib>>\nPBVSController" as pbvs_comp
+  component "ControlAllocator" as alloc_comp
+  component "VelocityCommanderNode" as vel_cmd {
+    portin "cam_vel" as vel_in
+    portout "cmd_vel_out" as vel_out_ch
+    portout "cmd_gim_out" as vel_out_gim
+  }
+}
+
+package "robot_platform_pkg" as platform_scope #FFDDDD {
+
+  component "ChassisDriverNode\n(LEKIWI 全向)\n50Hz" as ch_drv {
+    portin "cmd_vel_in" as ch_in
+    portout "odom" as ch_odom
+  }
+
+  component "GimbalDriverNode\n(DJI RS2 CAN)\n100Hz" as gim_drv {
+    portin "cmd_gim_in" as gim_in
+    portout "gimbal_state" as gim_state
+  }
+
+  component "IMUDriverNode\n(BNO055 I2C)\n100Hz" as imu_drv {
+    portout "imu_data" as imu_out
+  }
+
+  component "OdometryNode\n(三轮全向运动学)\n50Hz" as odm_node {
+    portin "cmd_vel_in" as odm_cmd
+    portin "imu_in" as odm_imu
+    portout "odom_out" as odm_odom
+  }
+
+  component "PlatformManagerNode\n(状态聚合)\n50Hz" as plat_mgr {
+    portin "odom_in" as plat_odom
+    portin "imu_in" as plat_imu
+    portout "platform_state" as plat_out
+  }
+}
+
+node "Foxglove Bridge\n(WebSocket :8765)" as fox
+node "RViz2" as rviz
+
+' ═══════════════════════════════════════════════════════════════
+' Topics (Connectors)
+' ═══════════════════════════════════════════════════════════════
+
+' Camera → Perception
+cam_img ------> det_in : /camera/image_raw\nBEST_EFFORT | depth=1
+cam_info ----> mgr_cinfo : /camera/camera_info\nTRANSIENT_LOCAL
+cam_depth ----> depth_img_in : /camera/depth/image_raw\nBEST_EFFORT
+
+' Perception internal
+det_out ----> trk_in : /perception/detections\nRELIABLE | depth=5
+trk_out ----> depth_trk_in : /perception/tracks\nRELIABLE | depth=5
+depth_out ----> mgr_target : /perception/targets_3d\nRELIABLE | depth=5
+
+' Servo → Platform
+mgr_cvel ----> ch_in : /cmd_vel\nRELIABLE | depth=10
+mgr_cgim ----> gim_in : /cmd_gimbal\nRELIABLE | depth=10
+
+' Platform → Servo (state feedback)
+ch_odom ----> plat_odom : /odom\nRELIABLE | depth=10
+imu_out ----> plat_imu : /imu/data\nBEST_EFFORT | depth=5
+plat_out ----> mgr_plat : /platform/state\nTRANSIENT_LOCAL
+
+' Monitoring
+mgr_state -----> fox : /servo/state\n(调试监控)
+mgr_state -----> rviz : /servo/state
+
+' Chassis Odometry for TF
+ch_odom -----> rviz : /odom
+
+' TF
+plat_out -----> rviz : /tf, /tf_static
+
+' ═══════════════════════════════════════════════════════════════
+' Allocation Legend
+' ═══════════════════════════════════════════════════════════════
+
+note bottom of mgr
+  <b>Callback Group 3: Servo Control</b>
+  线程: 1 (高优先级)
+  频率: 50Hz
+  功能: IBVS计算 + 控制分配
+end note
+
+note bottom of det
+  <b>Callback Group 2: Perception</b>
+  线程: 2-4 (GPU加速)
+  频率: 30Hz
+  功能: YOLO推理 + 跟踪 + 深度
+end note
+
+note bottom of plat_mgr
+  <b>Callback Group 5: Monitoring</b>
+  线程: 1
+  频率: 50Hz
+  功能: 状态聚合 + 发布
+end note
+
+@enduml
