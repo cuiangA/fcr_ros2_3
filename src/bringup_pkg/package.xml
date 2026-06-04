@@ -17,6 +17,7 @@
   <exec_depend>robot_platform_pkg</exec_depend>
   <exec_depend>vision_servo_msgs</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
+  <exec_depend>simulation_pkg</exec_depend>
   <exec_depend>rviz2</exec_depend>
 
   <export>

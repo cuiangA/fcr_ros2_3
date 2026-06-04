@@ -1,22 +1,46 @@
 # ── simulation_pkg CMakeLists.txt ───────────────────────────────────
-# 该包为纯资源包（无编译目标），CMake 仅负责：
-#   1. 安装 URDF 模型、世界文件、配置文件和启动文件到共享目录
-#   2. 将 Python 脚本安装为可执行程序
-# 无需 find_package 除 ament_cmake 之外的依赖：所有运行时依赖
-# 均已在 package.xml 中声明。
+# 该包负责：
+#   1. 编译 gimbal_controller_plugin（Gazebo 模型插件）
+#   2. 安装 URDF 模型、世界文件、配置文件和启动文件到共享目录
+#   3. 将 Python 脚本安装为可执行程序
 # ────────────────────────────────────────────────────────────────────
 
 cmake_minimum_required(VERSION 3.8)
 project(simulation_pkg)
 
+# C++17 for ROS2 + Gazebo compatibility
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 17)
+endif()
+
 # ament_cmake 是 ROS2 中 CMake 包的最小构建依赖
 find_package(ament_cmake REQUIRED)
+
+# ── 编译依赖：gimbal_controller_plugin ────────────────────────────
+find_package(gazebo_dev REQUIRED)
+find_package(gazebo_ros REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(vision_servo_msgs REQUIRED)
+
+add_library(gimbal_controller_plugin SHARED
+  src/gimbal_controller_plugin.cpp
+)
+target_include_directories(gimbal_controller_plugin PRIVATE include)
+ament_target_dependencies(gimbal_controller_plugin
+  gazebo_dev gazebo_ros rclcpp vision_servo_msgs
+)
 
 # ── 安装资源文件 ──────────────────────────────────────────────────
 # DIRECTORY 模式保留目录结构，便于 launch/urdf/worlds 文件在
 # 安装后仍保持原有的相对路径关系
 install(DIRECTORY urdf worlds launch
   DESTINATION share/${PROJECT_NAME}
+)
+
+# ── 安装编译后的 Gazebo 插件 ──────────────────────────────────────
+install(TARGETS gimbal_controller_plugin
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
 )
 
 # ── 安装 Python 脚本为可执行文件 ──────────────────────────────────

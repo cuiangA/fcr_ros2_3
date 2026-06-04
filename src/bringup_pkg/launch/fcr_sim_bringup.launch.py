@@ -84,13 +84,14 @@ def generate_launch_description():
             PathJoinSubstitution([servo_config, "ibvs_params.yaml"]),
             PathJoinSubstitution([servo_config, "allocator_params.yaml"]),
             {"controller_plugin": controller_plugin,
-             "allocation_ratio": allocation_ratio},
+             "allocation_ratio": allocation_ratio,
+             "auto_start": True},
         ],
     )
 
     # 云台驱动（仿真模式）。
-    # 注意：Gazebo 中没有云台关节控制器插件，/cmd_gimbal 不会驱动 3D 模型中的
-    # gimbal_yaw_joint / gimbal_pitch_joint。云台指令仅发布到话题供监控使用。
+    # Gazebo gimbal_yaw_joint / gimbal_pitch_joint 由 libgimbal_controller_plugin.so
+    # 驱动（在 URDF 中配置），/cmd_gimbal 可直接驱动 3D 模型中的云台关节。
     gimbal_driver = Node(
         package="robot_platform_pkg",
         executable="gimbal_driver_node",

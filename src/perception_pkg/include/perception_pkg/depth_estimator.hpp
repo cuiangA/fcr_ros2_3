@@ -35,6 +35,8 @@ private:
   void depth_callback(const sensor_msgs::msg::Image::ConstSharedPtr& depth_msg);
   /// 检测结果回调 — 缓存最新检测结果，触发融合估算
   void detection_callback(const vision_servo_msgs::msg::TargetArray::ConstSharedPtr& det_msg);
+  /// 相机内参回调 — 缓存针孔模型参数
+  void camera_info_callback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& info_msg);
   /// 实际的深度反投影与发布逻辑（双路数据均到达时执行）
   void estimate_and_publish();
 
@@ -47,18 +49,21 @@ private:
   float estimate_depth(const cv::Mat& depth_frame, const std::array<float, 4>& bbox);
 
   /**
-   * @brief 从 bbox 像素宽度推算深度（无需深度图）。
+   * @brief 从 bbox 像素面积推算深度（无需深度图）。
    *
-   * 基于针孔模型推导：depth = (focal_length × real_width) / bbox_width_px
-   * 假设目标真实宽度已知（默认 0.3m）。作为深度图不可用时的回退方案。
+   * 基于针孔模型的 2D 几何平均公式：
+   *   depth = sqrt((fx * fy * real_width * real_height) / (bbox_w_px * bbox_h_px))
    *
-   * @param bbox        边界框 [x_min, y_min, x_max, y_max]
-   * @param fx          相机焦距 (px)
-   * @param real_width  目标真实宽度 (m)，默认 0.3
+   * @param bbox         边界框 [x_min, y_min, x_max, y_max]
+   * @param fx           相机 X 方向焦距 (px)
+   * @param fy           相机 Y 方向焦距 (px)
+   * @param real_width   目标真实宽度 (m)
+   * @param real_height  目标真实高度 (m)
    * @return 估算深度值 (m)
    */
   float estimate_depth_from_bbox_area(
-      const std::array<float, 4>& bbox, double fx, double real_width = 0.3);
+      const std::array<float, 4>& bbox, double fx, double fy,
+      double real_width, double real_height);
 
   /**
    * @brief 根据深度值和图像坐标计算相机坐标系下的 3D 位置。
@@ -75,6 +80,7 @@ private:
 
   // ── 订阅者与发布者 ─────────────────────────────────────────────
   rclcpp::Subscription<vision_servo_msgs::msg::TargetArray>::SharedPtr det_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
   image_transport::Subscriber depth_sub_;
   rclcpp::Publisher<vision_servo_msgs::msg::TargetArray>::SharedPtr target3d_pub_;
 
@@ -86,6 +92,11 @@ private:
   // ── 双缓存（异步融合策略） ──────────────────────────────────────
   sensor_msgs::msg::Image::ConstSharedPtr last_depth_;       ///< 最新深度帧
   vision_servo_msgs::msg::TargetArray::ConstSharedPtr last_detections_; ///< 最新检测结果
+
+  // ── bbox 面积深度估算参数 ────────────────────────────────────
+  bool use_depth_camera_ = false;     ///< 是否订阅深度相机话题
+  double real_target_width_ = 0.3;    ///< 假设目标真实宽度 (m)
+  double real_target_height_ = 0.3;   ///< 假设目标真实高度 (m)
 };
 
 }  // namespace perception_pkg

@@ -22,8 +22,12 @@
   <maintainer email="dev@fcr-project.org">FCR Dev Team</maintainer>
   <license>Apache-2.0</license>
 
-  <!-- 构建依赖：仅需 ament_cmake，因为无编译目标 -->
+  <!-- 构建依赖：ament_cmake + gimbal_controller_plugin 编译所需库 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>gazebo_dev</build_depend>
+  <build_depend>gazebo_ros</build_depend>
+  <build_depend>rclcpp</build_depend>
+  <build_depend>vision_servo_msgs</build_depend>
 
   <!-- 运行时依赖：仿真环境、URDF 处理、状态发布和可视化所需的 ROS2 包 -->
   <exec_depend>gazebo_ros_pkgs</exec_depend>

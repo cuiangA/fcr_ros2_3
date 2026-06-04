@@ -3,3 +3,6 @@
 depth_estimator_node:
   ros__parameters:
     camera_frame: "camera_link"  # 相机在 TF 树中的坐标系名称（用于将 2D 点反投影到 3D）
+    use_depth_camera: false      # 是否订阅深度相机话题（关闭则使用 bbox 面积推算）
+    real_target_width: 0.3       # 假设目标真实宽度 (m)，用于 bbox 面积深度估算
+    real_target_height: 0.3      # 假设目标真实高度 (m)，用于 bbox 面积深度估算

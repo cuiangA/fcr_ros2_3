@@ -18,6 +18,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/core/mat.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <cmath>
 
 namespace perception_pkg {
 
@@ -26,18 +27,32 @@ DepthEstimatorNode::DepthEstimatorNode(const rclcpp::NodeOptions& options)
 {
   // ── 声明参数 ────────────────────────────────────────────────────
   this->declare_parameter("camera_frame", "camera_link");
+  this->declare_parameter("use_depth_camera", false);
+  this->declare_parameter("real_target_width", 0.3);
+  this->declare_parameter("real_target_height", 0.3);
+
   camera_frame_ = this->get_parameter("camera_frame").as_string();
+  use_depth_camera_ = this->get_parameter("use_depth_camera").as_bool();
+  real_target_width_ = this->get_parameter("real_target_width").as_double();
+  real_target_height_ = this->get_parameter("real_target_height").as_double();
 
   // ── 订阅者：检测结果（可靠 QoS） ─────────────────────────────────
   det_sub_ = this->create_subscription<vision_servo_msgs::msg::TargetArray>(
     "/perception/detections", qos::detections(),
     std::bind(&DepthEstimatorNode::detection_callback, this, std::placeholders::_1));
 
-  // ── 订阅者：深度图像（通过 image_transport 获取高效传输） ────────
-  depth_sub_ = image_transport::create_subscription(
-    this, "/camera/depth/image_raw",
-    std::bind(&DepthEstimatorNode::depth_callback, this, std::placeholders::_1),
-    "raw");  // "raw" = 不压缩，保证深度值精度
+  // ── 订阅者：相机内参（TRANSIENT_LOCAL，迟加入也能拿到最后一次标定） ─────
+  camera_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+    "/camera/camera_info", qos::camera_info(),
+    std::bind(&DepthEstimatorNode::camera_info_callback, this, std::placeholders::_1));
+
+  // ── 订阅者：深度图像（仅在 use_depth_camera=true 时订阅） ────────
+  if (use_depth_camera_) {
+    depth_sub_ = image_transport::create_subscription(
+      this, "/camera/depth/image_raw",
+      std::bind(&DepthEstimatorNode::depth_callback, this, std::placeholders::_1),
+      "raw");  // "raw" = 不压缩，保证深度值精度
+  }
 
   // ── 发布者：3D 目标位姿 ─────────────────────────────────────────
   target3d_pub_ = this->create_publisher<vision_servo_msgs::msg::TargetArray>(
@@ -57,7 +72,22 @@ void DepthEstimatorNode::detection_callback(
     const vision_servo_msgs::msg::TargetArray::ConstSharedPtr& det_msg)
 {
   last_detections_ = det_msg;     // 缓存最新检测结果
-  if (last_depth_) estimate_and_publish();  // 深度图已就绪 → 触发融合
+  // 有深度图时按双缓存策略触发；没有深度相机时直接走 bbox 面积推算
+  if (last_depth_ || !use_depth_camera_) estimate_and_publish();
+}
+
+void DepthEstimatorNode::camera_info_callback(
+    const sensor_msgs::msg::CameraInfo::ConstSharedPtr& info_msg)
+{
+  fx_ = info_msg->k[0];
+  fy_ = info_msg->k[4];
+  cx_ = info_msg->k[2];
+  cy_ = info_msg->k[5];
+  width_ = static_cast<int>(info_msg->width);
+  height_ = static_cast<int>(info_msg->height);
+  if (!info_msg->header.frame_id.empty()) {
+    camera_frame_ = info_msg->header.frame_id;
+  }
 }
 
 void DepthEstimatorNode::estimate_and_publish() {
@@ -76,10 +106,12 @@ void DepthEstimatorNode::estimate_and_publish() {
       confidence = (depth > 0.0f) ? 0.8f : 0.0f;
     }
 
-    // 方法 2：bbox 面积推算（无需深度图，无需 Gazebo）
-    if (depth <= 0.0f && target.bbox[2] > target.bbox[0]) {
+    // 方法 2：bbox 面积推算（无需深度图）
+    if (depth <= 0.0f && target.bbox[2] > target.bbox[0] && target.bbox[3] > target.bbox[1]) {
       depth = estimate_depth_from_bbox_area(
-          target.bbox, /*fx=*/std::max(fx_, 600.0), /*real_width=*/0.3);
+          target.bbox,
+          std::max(fx_, 600.0), std::max(fy_, 600.0),
+          real_target_width_, real_target_height_);
       confidence = (depth > 0.0f) ? 0.5f : 0.0f;
     }
 
@@ -99,11 +131,18 @@ float DepthEstimatorNode::estimate_depth(const cv::Mat& depth_frame, const std::
 }
 
 float DepthEstimatorNode::estimate_depth_from_bbox_area(
-    const std::array<float, 4>& bbox, double fx, double real_width) {
-  // 针孔模型推导：object_width_on_sensor / f = real_width / depth
-  // → depth = (f * real_width) / bbox_width_px
+    const std::array<float, 4>& bbox, double fx, double fy,
+    double real_width, double real_height) {
+  // 针孔模型二维几何平均：
+  //   depth_h = (fx * real_width) / bbox_width_px
+  //   depth_v = (fy * real_height) / bbox_height_px
+  //   depth = sqrt(depth_h * depth_v)
+  //         = sqrt((fx * fy * real_width * real_height) / area_px)
   double bbox_width_px = std::max(static_cast<double>(bbox[2] - bbox[0]), 1.0);
-  double depth = (fx * real_width) / bbox_width_px;
+  double bbox_height_px = std::max(static_cast<double>(bbox[3] - bbox[1]), 1.0);
+  double area_px = bbox_width_px * bbox_height_px;
+  double real_area = real_width * real_height;
+  double depth = std::sqrt((fx * fy * real_area) / area_px);
   return static_cast<float>(std::clamp(depth, 0.1, 50.0));
 }
 
@@ -111,7 +150,7 @@ void DepthEstimatorNode::compute_3d_position(
     vision_servo_msgs::msg::Target& target, float depth)
 {
   // 未标定（fx_ == 0）时无法反投影，直接跳过
-  if (fx_ == 0) return;
+  if (fx_ == 0 || fy_ == 0 || depth <= 0.0f) return;
   // 针孔模型反投影：
   //   X = (u - cx) / fx * Z   →  target.position[0]
   //   Y = (v - cy) / fy * Z   →  target.position[1]
