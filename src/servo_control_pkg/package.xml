@@ -33,7 +33,7 @@
   <depend>sensor_msgs</depend>             <!-- CameraInfo -->
   <depend>tf2_ros</depend>                 <!-- 坐标变换 -->
   <depend>tf2_geometry_msgs</depend>
-  <depend>Eigen3</depend>                  <!-- 线性代数（交互矩阵、伪逆） -->
+  <depend>eigen</depend>                  <!-- 线性代数（交互矩阵、伪逆） -->
   <depend>pluginlib</depend>               <!-- 动态控制器插件加载 -->
 
   <export>

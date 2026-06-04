@@ -11,6 +11,7 @@
 
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <memory>
 
 namespace robot_platform_pkg {

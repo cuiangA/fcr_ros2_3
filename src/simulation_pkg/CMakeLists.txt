@@ -13,9 +13,9 @@ project(simulation_pkg)
 find_package(ament_cmake REQUIRED)
 
 # ── 安装资源文件 ──────────────────────────────────────────────────
-# DIRECTORY 模式保留目录结构，便于 launch/urdf/config 文件在
+# DIRECTORY 模式保留目录结构，便于 launch/urdf/worlds 文件在
 # 安装后仍保持原有的相对路径关系
-install(DIRECTORY urdf worlds config launch
+install(DIRECTORY urdf worlds launch
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -24,6 +24,7 @@ install(DIRECTORY urdf worlds config launch
 install(PROGRAMS
   scripts/target_simulator.py
   scripts/camera_simulator.py
+  scripts/mock_detector.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

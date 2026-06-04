@@ -76,6 +76,7 @@ def generate_launch_description():
     # 三阶段全部在同一进程内运行，图像数据零拷贝传递
     container = ComposableNodeContainer(
         name="perception_container",
+        namespace="",
         package="rclcpp_components",
         executable="component_container_mt",  # 多线程执行器，并行处理
         composable_node_descriptions=[

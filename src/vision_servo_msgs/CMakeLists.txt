@@ -21,6 +21,13 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
+# rosidl_generate_interfaces 的 DEPENDENCIES 包必须事先 find_package
+find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(action_msgs REQUIRED)
+find_package(builtin_interfaces REQUIRED)
+
 # ── 接口定义与代码生成 ──────────────────────────────────────────
 # rosidl_generate_interfaces 宏会自动为每个 .msg / .srv / .action 生成：
 #   - C++ 头文件：include/<pkg>/msg/<Name>.hpp

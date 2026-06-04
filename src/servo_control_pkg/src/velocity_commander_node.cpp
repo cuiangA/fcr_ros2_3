@@ -15,6 +15,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <geometry_msgs/msg/vector3_stamped.hpp>
 #include "servo_control_pkg/qos.hpp"
 
 namespace servo_control_pkg {

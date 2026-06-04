@@ -32,7 +32,7 @@ MultiObjectTracker::MultiObjectTracker(int max_age, int min_hits, float iou_thre
 void MultiObjectTracker::predict() {
   for (auto& [id, track] : tracks_) {
     track.kf.predict();  // 卡尔曼预测步：先验估计 x̂ₖ|ₖ₋₁
-    track.age_++;         // 递增未更新计数（关联成功后会被重置）
+    track.age++;         // 递增未更新计数（关联成功后会被重置）
   }
 }
 
@@ -55,7 +55,7 @@ void MultiObjectTracker::update(const vision_servo_msgs::msg::TargetArray& detec
          det.bbox[2] - det.bbox[0], det.bbox[3] - det.bbox[1]);
     track.kf.correct(measurement);  // 卡尔曼校正步：后验估计 x̂ₖ|ₖ
     // 重置老化计数器（轨迹被确认存活）
-    track.age_ = 0;
+    track.age = 0;
     track.consecutive_invisible_count = 0;
     track.total_visible_count++;
     // 更新历史最佳置信度和类别
@@ -71,7 +71,7 @@ void MultiObjectTracker::update(const vision_servo_msgs::msg::TargetArray& detec
     Track new_track;
     new_track.id = next_id_++;
     new_track.class_name = det.class_name;
-    new_track.age_ = 0;
+    new_track.age = 0;
     new_track.total_visible_count = 1;
     new_track.consecutive_invisible_count = 0;
     new_track.max_confidence = det.confidence;
@@ -196,17 +196,19 @@ TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
 
   // ── 订阅者：检测结果 ─────────────────────────────────────────────
   det_sub_ = this->create_subscription<vision_servo_msgs::msg::TargetArray>(
-    "detections", qos::detections(),
+    "/perception/detections", qos::detections(),
     std::bind(&TrackingNode::detection_callback, this, std::placeholders::_1));
 
   // ── 发布者：跟踪轨迹 ─────────────────────────────────────────────
   track_pub_ = this->create_publisher<vision_servo_msgs::msg::TargetArray>(
-    "~/tracks", qos::detections());
+    "/perception/tracks", qos::detections());
 
   // ── 服务：设置跟踪目标 ───────────────────────────────────────────
   tracking_srv_ = this->create_service<vision_servo_msgs::srv::SetTrackingTarget>(
     "~/set_tracking_target",
-    [this](const auto& req, auto& resp) {
+    [this](
+      const std::shared_ptr<vision_servo_msgs::srv::SetTrackingTarget::Request> req,
+      std::shared_ptr<vision_servo_msgs::srv::SetTrackingTarget::Response> resp) {
       set_tracking_target(req->target_id, req->class_name, req->enable);
       resp->success = true;
       resp->message = "OK";
@@ -247,3 +249,11 @@ void TrackingNode::set_tracking_target(int target_id, const std::string& class_n
 
 #include <rclcpp_components/register_node_macro.hpp>
 RCLCPP_COMPONENTS_REGISTER_NODE(perception_pkg::TrackingNode)
+
+int main(int argc, char** argv) {
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<perception_pkg::TrackingNode>(rclcpp::NodeOptions());
+  rclcpp::spin(node);
+  rclcpp::shutdown();
+  return 0;
+}

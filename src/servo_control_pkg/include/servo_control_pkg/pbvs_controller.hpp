@@ -25,6 +25,7 @@ namespace servo_control_pkg {
 
 class PBVSController : public ServoControllerBase {
 public:
+  PBVSController() : ServoControllerBase("pbvs_controller", rclcpp::NodeOptions()) {}
   explicit PBVSController(const rclcpp::NodeOptions& options);
 
   std::optional<Eigen::Matrix<double, 6, 1>> computeVelocity(

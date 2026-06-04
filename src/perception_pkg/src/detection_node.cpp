@@ -24,11 +24,11 @@ DetectionNode::DetectionNode(const rclcpp::NodeOptions& options)
 
   // ── 发布者：2D 检测框（使用私有命名空间 ~/detections） ───────────
   det_pub_ = this->create_publisher<vision_servo_msgs::msg::TargetArray>(
-    "~/detections", qos::detections());
+    "/perception/detections", qos::detections());
 
   // ── 订阅者：原始图像（通过 image_transport 获取） ─────────────────
   image_sub_ = image_transport::create_subscription(
-    this, "~/image_raw",
+    this, "/camera/image_raw",
     std::bind(&DetectionNode::image_callback, this, std::placeholders::_1),
     "raw");  // "raw" = 不压缩，保证图像质量
 
@@ -94,3 +94,11 @@ vision_servo_msgs::msg::TargetArray DetectionNode::infer(const cv::Mat& frame) {
 
 #include <rclcpp_components/register_node_macro.hpp>
 RCLCPP_COMPONENTS_REGISTER_NODE(perception_pkg::DetectionNode)
+
+int main(int argc, char** argv) {
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<perception_pkg::DetectionNode>(rclcpp::NodeOptions());
+  rclcpp::spin(node);
+  rclcpp::shutdown();
+  return 0;
+}

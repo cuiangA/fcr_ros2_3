@@ -48,7 +48,7 @@ target_include_directories(three_wheel_kinematics INTERFACE include)
 target_link_libraries(three_wheel_kinematics INTERFACE Eigen3::Eigen)
 
 # ── 底盘驱动节点 ──────────────────────────────────────────────────
-add_executable(chassis_driver_node src/chassis_driver_node.cpp)
+add_executable(chassis_driver_node src/chassis_driver_node.cpp src/chassis_interface_impl.cpp)
 target_include_directories(chassis_driver_node PRIVATE include)
 ament_target_dependencies(chassis_driver_node
   rclcpp geometry_msgs sensor_msgs nav_msgs tf2_ros vision_servo_msgs
@@ -57,7 +57,7 @@ target_link_libraries(chassis_driver_node three_wheel_kinematics platform_qos)
 install(TARGETS chassis_driver_node DESTINATION lib/${PROJECT_NAME})
 
 # ── 云台驱动节点 ──────────────────────────────────────────────────
-add_executable(gimbal_driver_node src/gimbal_driver_node.cpp)
+add_executable(gimbal_driver_node src/gimbal_driver_node.cpp src/gimbal_interface_impl.cpp)
 target_include_directories(gimbal_driver_node PRIVATE include)
 ament_target_dependencies(gimbal_driver_node
   rclcpp vision_servo_msgs sensor_msgs
@@ -66,7 +66,7 @@ target_link_libraries(gimbal_driver_node platform_qos)
 install(TARGETS gimbal_driver_node DESTINATION lib/${PROJECT_NAME})
 
 # ── IMU 驱动节点 ──────────────────────────────────────────────────
-add_executable(imu_driver_node src/imu_driver_node.cpp)
+add_executable(imu_driver_node src/imu_driver_node.cpp src/imu_interface_impl.cpp)
 target_include_directories(imu_driver_node PRIVATE include)
 ament_target_dependencies(imu_driver_node
   rclcpp sensor_msgs
@@ -75,7 +75,7 @@ target_link_libraries(imu_driver_node platform_qos)
 install(TARGETS imu_driver_node DESTINATION lib/${PROJECT_NAME})
 
 # ── 里程计节点 ────────────────────────────────────────────────────
-add_executable(odometry_node src/odometry_node.cpp)
+add_executable(odometry_node src/odometry_node.cpp src/odometry_interface_impl.cpp)
 target_include_directories(odometry_node PRIVATE include)
 ament_target_dependencies(odometry_node
   rclcpp nav_msgs geometry_msgs tf2_ros sensor_msgs

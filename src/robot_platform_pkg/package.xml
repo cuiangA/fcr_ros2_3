@@ -32,7 +32,7 @@
   <depend>nav_msgs</depend>              <!-- Odometry -->
   <depend>tf2_ros</depend>               <!-- TF 坐标变换广播 -->
   <depend>tf2_geometry_msgs</depend>
-  <depend>Eigen3</depend>                <!-- 线性代数库（运动学、里程计） -->
+  <depend>eigen</depend>                <!-- 线性代数库（运动学、里程计） -->
 
   <export>
     <build_type>ament_cmake</build_type>

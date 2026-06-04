@@ -124,6 +124,7 @@ install(TARGETS velocity_commander_node DESTINATION lib/${PROJECT_NAME})
 
 # ── Plugin XML（pluginlib 发现的必要文件） ─────────────────────────
 install(FILES plugins.xml DESTINATION share/${PROJECT_NAME})
+pluginlib_export_plugin_description_file(servo_control_pkg plugins.xml)
 
 # ── 头文件 ────────────────────────────────────────────────────────
 install(DIRECTORY include/ DESTINATION include)

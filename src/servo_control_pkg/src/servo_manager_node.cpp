@@ -31,6 +31,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <pluginlib/class_loader.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 #include <memory>
 #include <string>
 

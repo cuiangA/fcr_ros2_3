@@ -18,6 +18,7 @@ from launch.actions import (
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch.conditions import IfCondition
 
 
 def generate_launch_description():
@@ -26,12 +27,14 @@ def generate_launch_description():
     controller_plugin = LaunchConfiguration("controller_plugin")
     conf_threshold = LaunchConfiguration("confidence_threshold")
     use_composition = LaunchConfiguration("use_composition")
+    use_mock_detector = LaunchConfiguration("use_mock_detector")
 
     # 各包的共享目录，用于引用 launch 文件
     pkg_share = FindPackageShare("bringup_pkg")
     perception_share = FindPackageShare("perception_pkg")
     servo_share = FindPackageShare("servo_control_pkg")
     platform_share = FindPackageShare("robot_platform_pkg")
+    sim_share = FindPackageShare("simulation_pkg")
 
     # ── 1. 机器人平台（硬件驱动层） ─────────────────────────
     platform_launch = IncludeLaunchDescription(
@@ -46,6 +49,15 @@ def generate_launch_description():
             "use_composition": use_composition,
             "confidence_threshold": conf_threshold,
         }.items(),
+    )
+
+    # ── 2b. Mock 检测器（仿真模式下的合成检测结果） ──────────
+    mock_detector = Node(
+        package="simulation_pkg",
+        executable="mock_detector.py",
+        name="mock_detector",
+        output="screen",
+        condition=IfCondition(use_mock_detector),
     )
 
     # ── 3. 伺服控制 ─────────────────────────────────────────
@@ -90,9 +102,12 @@ def generate_launch_description():
                               description="是否启动 RViz2"),
         DeclareLaunchArgument("use_foxglove", default_value="false",
                               description="是否启动 Foxglove WebSocket 桥接"),
+        DeclareLaunchArgument("use_mock_detector", default_value="false",
+                              description="是否使用合成检测器（绕过 YOLO）"),
 
         # 阶段 1：平台驱动 (t=0s)
         platform_launch,
+        mock_detector,
 
         # 阶段 2：感知管线 (t=2s，等待相机驱动就绪)
         TimerAction(period=2.0, actions=[perception_launch]),

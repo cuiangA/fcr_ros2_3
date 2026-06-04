@@ -26,9 +26,11 @@
 #include <image_transport/subscriber_filter.hpp>
 #include <message_filters/subscriber.h>
 #include <message_filters/sync_policies/approximate_time.h>
+#include <opencv2/core/mat.hpp>
 #include <memory>
 #include <string>
 #include <vector>
+#include <array>
 
 #include "perception_pkg/detection_node.hpp"
 #include "perception_pkg/tracking_node.hpp"
@@ -52,6 +54,20 @@ private:
    * 三个阶段均为进程内调用（按顺序同步执行），零拷贝。
    */
   void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr& msg);
+  /**
+   * @brief 从深度图的边界框中心点估计深度值（需要深度图）。
+   */
+  float estimate_depth_for_box(const cv::Mat& depth_frame, const std::array<float, 4>& bbox);
+  /**
+   * @brief 从 bbox 像素宽度推算深度（无需深度图，无 Gazebo 可工作）。
+   * depth = (focal_length × real_width) / bbox_width_px
+   */
+  float estimate_depth_from_bbox_area(
+      const std::array<float, 4>& bbox, double fx, double real_width);
+  /**
+   * @brief 针孔模型反投影：图像坐标 → 相机系 3D 位置。
+   */
+  void compute_3d_position_target(vision_servo_msgs::msg::Target& target, float depth);
 
   // ── 管线输入 ────────────────────────────────────────────────────
   image_transport::Subscriber image_sub_;       ///< RGB 图像输入
@@ -81,6 +97,10 @@ private:
   // ── 相机标定状态 ────────────────────────────────────────────────
   double fx_, fy_, cx_, cy_;  ///< 针孔内参矩阵参数（来自 camera_info）
   bool calibrated_;            ///< 是否已完成标定初始化
+
+  // ── 深度图缓存 ──────────────────────────────────────────────────
+  cv::Mat last_depth_frame_;   ///< 最新深度帧缓存
+  bool depth_available_ = false;  ///< 是否已收到深度帧
 };
 
 }  // namespace perception_pkg

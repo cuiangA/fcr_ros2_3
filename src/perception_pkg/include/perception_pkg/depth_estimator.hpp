@@ -20,6 +20,7 @@
 #include <sensor_msgs/msg/image.hpp>
 #include <vision_servo_msgs/msg/target_array.hpp>
 #include <image_transport/image_transport.hpp>
+#include <opencv2/core/mat.hpp>
 #include <memory>
 #include <string>
 
@@ -43,7 +44,21 @@ private:
    * @param bbox        边界框 [x_min, y_min, x_max, y_max]，单位像素
    * @return 深度值，单位米
    */
-  float estimate_depth(const cv::Mat& depth_frame, const float bbox[4]);
+  float estimate_depth(const cv::Mat& depth_frame, const std::array<float, 4>& bbox);
+
+  /**
+   * @brief 从 bbox 像素宽度推算深度（无需深度图）。
+   *
+   * 基于针孔模型推导：depth = (focal_length × real_width) / bbox_width_px
+   * 假设目标真实宽度已知（默认 0.3m）。作为深度图不可用时的回退方案。
+   *
+   * @param bbox        边界框 [x_min, y_min, x_max, y_max]
+   * @param fx          相机焦距 (px)
+   * @param real_width  目标真实宽度 (m)，默认 0.3
+   * @return 估算深度值 (m)
+   */
+  float estimate_depth_from_bbox_area(
+      const std::array<float, 4>& bbox, double fx, double real_width = 0.3);
 
   /**
    * @brief 根据深度值和图像坐标计算相机坐标系下的 3D 位置。

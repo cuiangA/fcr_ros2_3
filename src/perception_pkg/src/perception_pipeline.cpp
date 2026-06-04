@@ -15,6 +15,7 @@
 #include "perception_pkg/perception_pipeline.hpp"
 #include "perception_pkg/qos.hpp"
 #include <cv_bridge/cv_bridge.h>
+#include <algorithm>
 
 namespace perception_pkg {
 
@@ -46,19 +47,20 @@ PerceptionPipeline::PerceptionPipeline(const rclcpp::NodeOptions& options)
 
   // RGB 图像订阅
   image_sub_ = image_transport::create_subscription(
-    this, "image_raw",
+    this, "/camera/image_raw",
     std::bind(&PerceptionPipeline::image_callback, this, std::placeholders::_1),
     "raw");
 
-  // 深度图像订阅（当前为占位回调）
+  // 深度图像订阅（缓存最新深度图用于阶段 3 反投影）
   depth_sub_ = image_transport::create_subscription(
-    this, "depth/image_raw", [this](const sensor_msgs::msg::Image::ConstSharedPtr&) {
-      // [占位] 深度图缓存和融合逻辑
+    this, "/camera/depth/image_raw", [this](const sensor_msgs::msg::Image::ConstSharedPtr& msg) {
+      last_depth_frame_ = cv_bridge::toCvShare(msg, "16UC1")->image.clone();
+      depth_available_ = true;
     }, "raw");
 
   // 相机内参订阅（TRANSIENT_LOCAL QoS = 迟加入也能获取最后发布的内参）
   camera_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-    "camera_info", qos::camera_info(),
+    "/camera/camera_info", qos::camera_info(),
     [this](const sensor_msgs::msg::CameraInfo::ConstSharedPtr& info) {
       // 提取针孔模型内参矩阵 K 的参数
       fx_ = info->k[0]; fy_ = info->k[4];
@@ -68,16 +70,18 @@ PerceptionPipeline::PerceptionPipeline(const rclcpp::NodeOptions& options)
 
   // ── 4. 发布者（三个阶段各自的输出话题） ─────────────────────────
   det_pub_ = this->create_publisher<vision_servo_msgs::msg::TargetArray>(
-    "~/detections", qos::detections());
+    "/perception/detections", qos::detections());
   track_pub_ = this->create_publisher<vision_servo_msgs::msg::TargetArray>(
-    "~/tracks", qos::detections());
+    "/perception/tracks", qos::detections());
   target3d_pub_ = this->create_publisher<vision_servo_msgs::msg::TargetArray>(
-    "~/targets_3d", qos::detections());
+    "/perception/targets_3d", qos::detections());
 
   // ── 5. 服务 ─────────────────────────────────────────────────────
   tracking_srv_ = this->create_service<vision_servo_msgs::srv::SetTrackingTarget>(
     "~/set_tracking_target",
-    [this](const auto& req, auto& resp) {
+    [this](
+      const std::shared_ptr<vision_servo_msgs::srv::SetTrackingTarget::Request> req,
+      std::shared_ptr<vision_servo_msgs::srv::SetTrackingTarget::Response> resp) {
       active_tracking_id_ = req->target_id;  // 设置当前跟踪目标
       resp->success = true;
       resp->message = "OK";
@@ -106,8 +110,65 @@ void PerceptionPipeline::image_callback(
   track_pub_->publish(tracks);
 
   // ── 阶段 3：深度估计 ────────────────────────────────────────────
-  // [深度融合占位]
+  // 深度估计采用两级回退策略：
+  //   优先级 1：深度图采样（Gazebo 深度相机发布时，最准确）
+  //   优先级 2：bbox 面积推算（无深度图时，假设已知目标真实尺寸）
+  if (calibrated_) {
+    for (auto& target : tracks.targets) {
+      float depth = 0.0f;
+      float confidence = 0.0f;
+
+      if (depth_available_) {
+        // 方法 1：直接从深度图采样 bbox 中心点
+        depth = estimate_depth_for_box(last_depth_frame_, target.bbox);
+        confidence = (depth > 0.0f) ? 0.8f : 0.0f;
+      }
+
+      if (depth <= 0.0f && target.bbox[2] > target.bbox[0]) {
+        // 方法 2：用 bbox 像素面积推算深度（无需深度图）
+        // 原理：depth = (f * real_size) / pixel_size
+        // 假设相机 f=600px, 目标真实宽高 ≈ 0.3m
+        depth = estimate_depth_from_bbox_area(
+            target.bbox, /*fx=*/std::max(fx_, 600.0), /*real_width=*/0.3);
+        confidence = (depth > 0.0f) ? 0.5f : 0.0f;  // 推算值置信度低于传感器直接测量
+      }
+
+      target.depth_confidence = confidence;
+      if (depth > 0.0f) {
+        compute_3d_position_target(target, depth);
+      }
+    }
+  }
   target3d_pub_->publish(tracks);
+}
+
+float PerceptionPipeline::estimate_depth_for_box(
+    const cv::Mat& depth_frame, const std::array<float, 4>& bbox) {
+  float cx_bbox = (bbox[0] + bbox[2]) / 2.0f;
+  float cy_bbox = (bbox[1] + bbox[3]) / 2.0f;
+  int px = std::clamp(static_cast<int>(cx_bbox), 0, depth_frame.cols - 1);
+  int py = std::clamp(static_cast<int>(cy_bbox), 0, depth_frame.rows - 1);
+  return depth_frame.at<uint16_t>(py, px) / 1000.0f;
+}
+
+float PerceptionPipeline::estimate_depth_from_bbox_area(
+    const std::array<float, 4>& bbox, double fx, double real_width) {
+  // 针孔模型：object_width_on_sensor / focal_length = real_width / depth
+  // → depth = (focal_length_px * real_width_m) / bbox_width_px
+  double bbox_width_px = std::max(static_cast<double>(bbox[2] - bbox[0]), 1.0);
+  double depth = (fx * real_width) / bbox_width_px;
+  // 钳位到合理范围：0.1m ~ 50m
+  return static_cast<float>(std::clamp(depth, 0.1, 50.0));
+}
+
+void PerceptionPipeline::compute_3d_position_target(
+    vision_servo_msgs::msg::Target& target, float depth) {
+  if (fx_ == 0) return;  // 未标定
+  // 针孔模型反投影：
+  //   X = (u - cx) / fx * Z,  Y = (v - cy) / fy * Z,  Z = depth
+  target.position[0] = (target.center[0] - cx_) / fx_ * depth;
+  target.position[1] = (target.center[1] - cy_) / fy_ * depth;
+  target.position[2] = depth;
 }
 
 }  // namespace perception_pkg

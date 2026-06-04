@@ -17,6 +17,8 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <vision_servo_msgs/msg/target_array.hpp>
+#include <vision_servo_msgs/srv/set_tracking_target.hpp>
+#include <opencv2/video/tracking.hpp>
 #include <memory>
 #include <deque>
 #include <map>

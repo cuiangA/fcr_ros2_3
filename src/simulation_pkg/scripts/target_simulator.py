@@ -19,6 +19,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker
+from vision_servo_msgs.msg import Target, TargetArray
 import math
 
 
@@ -48,11 +49,19 @@ class TargetSimulator(Node):
         self.declare_parameter("radius", 1.0)
         self.declare_parameter("speed", 0.5)
         self.declare_parameter("height", 1.0)
+        self.declare_parameter("publish_target_array", False)
+        self.declare_parameter("camera_frame", "camera_link")
 
         # ── 2. 创建发布者 ──────────────────────────────────────────
         # 队列深度 10：允许短暂的处理抖动而不丢失目标数据
         self.pose_pub = self.create_publisher(PoseStamped, "/target/pose", 10)
         self.marker_pub = self.create_publisher(Marker, "/target/marker", 10)
+        if self.get_parameter("publish_target_array").value:
+            self.target3d_pub = self.create_publisher(
+                TargetArray, "/perception/targets_3d", 10)
+            self.camera_frame_ = self.get_parameter("camera_frame").value
+        else:
+            self.target3d_pub = None
 
         # ── 3. 50 Hz 更新频率 = 20ms 间隔，确保轨迹平滑 ────────────
         self.timer = self.create_timer(0.02, self.update)
@@ -105,6 +114,25 @@ class TargetSimulator(Node):
         marker.color.a = 1.0                # 完全不透明
         marker.color.r = 1.0                # 红色，突出显示
         self.marker_pub.publish(marker)
+
+        # ── 4. 可选：发布 3D 目标位姿（直连伺服控制回路）──────────
+        if self.target3d_pub is not None:
+            target = Target()
+            target.class_name = "target"
+            target.confidence = 0.9
+            target.depth_confidence = 1.0
+            # 位置：odom 坐标系下的 3D 坐标（供 PBVS 使用）
+            target.position = [x, y, h]
+            # 填充虚拟的图像特征（供 IBVS 控制器使用）
+            # bbox：640x480 图像中央的 80x80 像素框
+            target.bbox = [280.0, 200.0, 360.0, 280.0]
+            target.center = [320.0, 240.0]
+            target_array = TargetArray()
+            target_array.header = pose.header
+            target_array.header.frame_id = self.camera_frame_
+            target_array.targets = [target]
+            target_array.tracking_id = 0
+            self.target3d_pub.publish(target_array)
 
 
 def main(args=None):

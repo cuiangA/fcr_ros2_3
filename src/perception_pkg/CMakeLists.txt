@@ -45,7 +45,7 @@ target_link_libraries(perception_qos INTERFACE rclcpp::rclcpp)
 add_executable(detection_node src/detection_node.cpp)
 target_include_directories(detection_node PRIVATE include)
 ament_target_dependencies(detection_node
-  rclcpp sensor_msgs vision_servo_msgs cv_bridge image_transport OpenCV
+  rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge image_transport OpenCV
 )
 target_link_libraries(detection_node perception_qos)
 install(TARGETS detection_node DESTINATION lib/${PROJECT_NAME})
@@ -54,7 +54,7 @@ install(TARGETS detection_node DESTINATION lib/${PROJECT_NAME})
 add_executable(tracking_node src/tracking_node.cpp)
 target_include_directories(tracking_node PRIVATE include)
 ament_target_dependencies(tracking_node
-  rclcpp sensor_msgs vision_servo_msgs cv_bridge OpenCV
+  rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge OpenCV
 )
 target_link_libraries(tracking_node perception_qos)
 install(TARGETS tracking_node DESTINATION lib/${PROJECT_NAME})
@@ -63,7 +63,7 @@ install(TARGETS tracking_node DESTINATION lib/${PROJECT_NAME})
 add_executable(depth_estimator_node src/depth_estimator_node.cpp)
 target_include_directories(depth_estimator_node PRIVATE include)
 ament_target_dependencies(depth_estimator_node
-  rclcpp sensor_msgs vision_servo_msgs cv_bridge image_transport tf2_ros tf2_geometry_msgs
+  rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge image_transport tf2_ros tf2_geometry_msgs
 )
 target_link_libraries(depth_estimator_node perception_qos)
 install(TARGETS depth_estimator_node DESTINATION lib/${PROJECT_NAME})

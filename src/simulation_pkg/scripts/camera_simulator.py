@@ -58,7 +58,12 @@ class CameraSimulator(Node):
         # ── 3. 创建发布者，队列深度设为 1 ──────────────────────────
         # 仿真图像对流式旧数据无意义：只需最新帧，避免管线积压
         self.image_pub = self.create_publisher(Image, "/camera/image_raw", 1)
-        self.camera_info_pub = self.create_publisher(CameraInfo, "/camera/camera_info", 1)
+        # TRANSIENT_LOCAL + RELIABLE = 迟加入的订阅者也能收到最后一次发布的内参
+        self.camera_info_pub = self.create_publisher(
+            CameraInfo, "/camera/camera_info",
+            rclpy.qos.QoSProfile(depth=1, reliability=rclpy.qos.ReliabilityPolicy.RELIABLE,
+                                 durability=rclpy.qos.DurabilityPolicy.TRANSIENT_LOCAL))
+
 
         # ── 4. 创建定时器，驱动周期性图像发布 ──────────────────────
         self.timer = self.create_timer(1.0 / fps, self.publish)

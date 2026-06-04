@@ -16,6 +16,7 @@
 #include "perception_pkg/depth_estimator.hpp"
 #include "perception_pkg/qos.hpp"
 #include <cv_bridge/cv_bridge.h>
+#include <opencv2/core/mat.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace perception_pkg {
@@ -29,18 +30,18 @@ DepthEstimatorNode::DepthEstimatorNode(const rclcpp::NodeOptions& options)
 
   // ── 订阅者：检测结果（可靠 QoS） ─────────────────────────────────
   det_sub_ = this->create_subscription<vision_servo_msgs::msg::TargetArray>(
-    "detections", qos::detections(),
+    "/perception/detections", qos::detections(),
     std::bind(&DepthEstimatorNode::detection_callback, this, std::placeholders::_1));
 
   // ── 订阅者：深度图像（通过 image_transport 获取高效传输） ────────
   depth_sub_ = image_transport::create_subscription(
-    this, "depth/image_raw",
+    this, "/camera/depth/image_raw",
     std::bind(&DepthEstimatorNode::depth_callback, this, std::placeholders::_1),
     "raw");  // "raw" = 不压缩，保证深度值精度
 
   // ── 发布者：3D 目标位姿 ─────────────────────────────────────────
   target3d_pub_ = this->create_publisher<vision_servo_msgs::msg::TargetArray>(
-    "~/targets_3d", qos::detections());
+    "/perception/targets_3d", qos::detections());
 
   RCLCPP_INFO(get_logger(), "深度估计节点已启动");
 }
@@ -60,32 +61,50 @@ void DepthEstimatorNode::detection_callback(
 }
 
 void DepthEstimatorNode::estimate_and_publish() {
-  if (!last_depth_ || !last_detections_) return;
+  if (!last_detections_) return;
 
-  // 将 ROS 深度图像消息转换为 OpenCV 格式（16UC1 = 16 位无符号单通道，单位毫米）
-  cv::Mat depth_frame = cv_bridge::toCvShare(last_depth_, "16UC1")->image;
   auto targets_3d = *last_detections_;  // 拷贝检测结果，填充 3D 信息
 
-  // 对每个检测目标执行深度反投影
   for (auto& target : targets_3d.targets) {
-    float depth = estimate_depth(depth_frame, target.bbox);
-    // depth_confidence：有效深度 = 0.8，无效深度（0） = 0.0
-    target.depth_confidence = (depth > 0) ? 0.8f : 0.0f;
+    float depth = 0.0f;
+    float confidence = 0.0f;
+
+    // 方法 1：深度图采样（有 Gazebo 深度相机时优先使用）
+    if (last_depth_) {
+      cv::Mat depth_frame = cv_bridge::toCvShare(last_depth_, "16UC1")->image;
+      depth = estimate_depth(depth_frame, target.bbox);
+      confidence = (depth > 0.0f) ? 0.8f : 0.0f;
+    }
+
+    // 方法 2：bbox 面积推算（无需深度图，无需 Gazebo）
+    if (depth <= 0.0f && target.bbox[2] > target.bbox[0]) {
+      depth = estimate_depth_from_bbox_area(
+          target.bbox, /*fx=*/std::max(fx_, 600.0), /*real_width=*/0.3);
+      confidence = (depth > 0.0f) ? 0.5f : 0.0f;
+    }
+
+    target.depth_confidence = confidence;
     compute_3d_position(target, depth);
   }
 
   target3d_pub_->publish(targets_3d);
 }
 
-float DepthEstimatorNode::estimate_depth(const cv::Mat& depth_frame, const float bbox[4]) {
-  // 取边界框中心点作为深度采样位置
+float DepthEstimatorNode::estimate_depth(const cv::Mat& depth_frame, const std::array<float, 4>& bbox) {
   float cx_bbox = (bbox[0] + bbox[2]) / 2.0f;
   float cy_bbox = (bbox[1] + bbox[3]) / 2.0f;
-  // 钳位到图像边界内，防止越界访问
   int px = std::clamp(static_cast<int>(cx_bbox), 0, depth_frame.cols - 1);
   int py = std::clamp(static_cast<int>(cy_bbox), 0, depth_frame.rows - 1);
-  // 深度图存储单位为毫米，除以 1000 转换为米
   return depth_frame.at<uint16_t>(py, px) / 1000.0f;
+}
+
+float DepthEstimatorNode::estimate_depth_from_bbox_area(
+    const std::array<float, 4>& bbox, double fx, double real_width) {
+  // 针孔模型推导：object_width_on_sensor / f = real_width / depth
+  // → depth = (f * real_width) / bbox_width_px
+  double bbox_width_px = std::max(static_cast<double>(bbox[2] - bbox[0]), 1.0);
+  double depth = (fx * real_width) / bbox_width_px;
+  return static_cast<float>(std::clamp(depth, 0.1, 50.0));
 }
 
 void DepthEstimatorNode::compute_3d_position(
@@ -106,3 +125,11 @@ void DepthEstimatorNode::compute_3d_position(
 
 #include <rclcpp_components/register_node_macro.hpp>
 RCLCPP_COMPONENTS_REGISTER_NODE(perception_pkg::DepthEstimatorNode)
+
+int main(int argc, char** argv) {
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<perception_pkg::DepthEstimatorNode>(rclcpp::NodeOptions());
+  rclcpp::spin(node);
+  rclcpp::shutdown();
+  return 0;
+}
