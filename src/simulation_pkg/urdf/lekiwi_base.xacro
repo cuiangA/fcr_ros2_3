@@ -5,17 +5,36 @@
   <xacro:macro name="lekiwi_base" params="parent:=base_link prefix:=''">
     <!-- Base link -->
     <link name="${prefix}base_link">
-      <visual>
+      <visual name="base_body">
+        <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <cylinder radius="0.2" length="0.1"/>
+          <box size="0.46 0.34 0.08"/>
         </geometry>
         <material name="dark_grey">
-          <color rgba="0.3 0.3 0.3 1.0"/>
+          <color rgba="0.25 0.25 0.25 1.0"/>
+        </material>
+      </visual>
+      <visual name="base_top_plate">
+        <origin xyz="0 0 0.055" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.18" length="0.02"/>
+        </geometry>
+        <material name="medium_grey">
+          <color rgba="0.45 0.45 0.45 1.0"/>
+        </material>
+      </visual>
+      <visual name="front_marker">
+        <origin xyz="0.20 0 0.075" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.08 0.04 0.03"/>
+        </geometry>
+        <material name="front_green">
+          <color rgba="0.0 0.8 0.25 1.0"/>
         </material>
       </visual>
       <collision>
         <geometry>
-          <cylinder radius="0.2" length="0.1"/>
+          <box size="0.46 0.34 0.08"/>
         </geometry>
       </collision>
       <inertial>
@@ -27,17 +46,28 @@
     <!-- Omni wheels (3x, at 120° intervals) -->
     <xacro:macro name="omni_wheel" params="name angle">
       <link name="${prefix}${name}_wheel">
-        <visual>
+        <visual name="${name}_tire">
+          <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
           <geometry>
-            <cylinder radius="0.05" length="0.02"/>
+            <cylinder radius="0.065" length="0.04"/>
           </geometry>
           <material name="black">
             <color rgba="0.1 0.1 0.1 1.0"/>
           </material>
         </visual>
-        <collision>
+        <visual name="${name}_hub">
+          <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
           <geometry>
-            <cylinder radius="0.05" length="0.02"/>
+            <cylinder radius="0.025" length="0.048"/>
+          </geometry>
+          <material name="wheel_hub">
+            <color rgba="0.8 0.8 0.8 1.0"/>
+          </material>
+        </visual>
+        <collision>
+          <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+          <geometry>
+            <cylinder radius="0.065" length="0.04"/>
           </geometry>
         </collision>
         <inertial>
@@ -49,7 +79,7 @@
       <joint name="${prefix}${name}_wheel_joint" type="continuous">
         <parent link="${prefix}base_link"/>
         <child link="${prefix}${name}_wheel"/>
-        <origin xyz="${0.15 * cos(angle)} ${0.15 * sin(angle)} -0.04" rpy="0 0 0"/>
+        <origin xyz="${0.23 * cos(angle)} ${0.23 * sin(angle)} -0.045" rpy="0 0 ${angle}"/>
         <axis xyz="0 1 0"/>
       </joint>
     </xacro:macro>
@@ -60,6 +90,15 @@
 
     <!-- IMU link -->
     <link name="${prefix}imu_link">
+      <visual name="imu_marker">
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.035 0.025 0.012"/>
+        </geometry>
+        <material name="imu_red">
+          <color rgba="0.9 0.05 0.05 1.0"/>
+        </material>
+      </visual>
       <inertial>
         <mass value="0.01"/>
         <inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/>

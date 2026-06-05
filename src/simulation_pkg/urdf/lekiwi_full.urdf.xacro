@@ -22,6 +22,11 @@
       <ros>
         <remapping>joint_states:=/joint_states</remapping>
       </ros>
+      <joint_name>front_wheel_joint</joint_name>
+      <joint_name>left_wheel_joint</joint_name>
+      <joint_name>right_wheel_joint</joint_name>
+      <joint_name>gimbal_yaw_joint</joint_name>
+      <joint_name>gimbal_pitch_joint</joint_name>
       <update_rate>100</update_rate>
     </plugin>
   </gazebo>
