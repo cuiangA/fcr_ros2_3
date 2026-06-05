@@ -28,6 +28,9 @@
         <inertia ixx="5e-4" iyy="5e-4" izz="1e-3" ixy="0" ixz="0" iyz="0"/>
       </inertial>
     </link>
+    <gazebo reference="${prefix}gimbal_yaw_link">
+      <material>Gazebo/Orange</material>
+    </gazebo>
 
     <joint name="${prefix}gimbal_yaw_joint" type="revolute">
       <parent link="${parent}"/>
@@ -53,6 +56,9 @@
         <inertia ixx="2e-4" iyy="2e-4" izz="1e-4" ixy="0" ixz="0" iyz="0"/>
       </inertial>
     </link>
+    <gazebo reference="${prefix}gimbal_pitch_link">
+      <material>Gazebo/Blue</material>
+    </gazebo>
 
     <joint name="${prefix}gimbal_pitch_joint" type="revolute">
       <parent link="${prefix}gimbal_yaw_link"/>
@@ -87,6 +93,9 @@
         <inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" ixz="0" iyz="0"/>
       </inertial>
     </link>
+    <gazebo reference="${prefix}camera_link">
+      <material>Gazebo/Blue</material>
+    </gazebo>
 
     <joint name="${prefix}camera_joint" type="fixed">
       <parent link="${prefix}gimbal_pitch_link"/>

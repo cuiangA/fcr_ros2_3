@@ -28,20 +28,26 @@
     <!-- Add some objects for target tracking -->
     <model name="target_box">
       <static>false</static>
-      <pose>2 0 0.5 0 0 0</pose>
+      <pose>1 0 1.0 0 0 0</pose>
       <link name="box_link">
+        <gravity>false</gravity>
         <visual name="visual">
           <geometry>
-            <box size="0.3 0.3 0.3"/>
+            <box size="0.35 0.35 0.35"/>
           </geometry>
           <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Red</name>
+            </script>
             <ambient>1 0 0 1</ambient>
             <diffuse>1 0 0 1</diffuse>
+            <emissive>0.4 0 0 1</emissive>
           </material>
         </visual>
         <collision name="collision">
           <geometry>
-            <box size="0.3 0.3 0.3"/>
+            <box size="0.35 0.35 0.35"/>
           </geometry>
         </collision>
         <inertial>

@@ -23,15 +23,6 @@
           <color rgba="0.45 0.45 0.45 1.0"/>
         </material>
       </visual>
-      <visual name="front_marker">
-        <origin xyz="0.20 0 0.075" rpy="0 0 0"/>
-        <geometry>
-          <box size="0.08 0.04 0.03"/>
-        </geometry>
-        <material name="front_green">
-          <color rgba="0.0 0.8 0.25 1.0"/>
-        </material>
-      </visual>
       <collision>
         <geometry>
           <box size="0.46 0.34 0.08"/>
@@ -42,6 +33,35 @@
         <inertia ixx="0.15" iyy="0.15" izz="0.25" ixy="0" ixz="0" iyz="0"/>
       </inertial>
     </link>
+
+    <!-- Separate link so Gazebo can keep the front marker green. -->
+    <link name="${prefix}front_marker_link">
+      <visual name="front_marker">
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.08 0.04 0.03"/>
+        </geometry>
+        <material name="front_green">
+          <color rgba="0.0 0.8 0.25 1.0"/>
+        </material>
+      </visual>
+      <inertial>
+        <mass value="0.01"/>
+        <inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+    </link>
+    <joint name="${prefix}front_marker_joint" type="fixed">
+      <parent link="${prefix}base_link"/>
+      <child link="${prefix}front_marker_link"/>
+      <origin xyz="0.20 0 0.075" rpy="0 0 0"/>
+    </joint>
+
+    <gazebo reference="${prefix}base_link">
+      <material>Gazebo/DarkGrey</material>
+    </gazebo>
+    <gazebo reference="${prefix}front_marker_link">
+      <material>Gazebo/Green</material>
+    </gazebo>
 
     <!-- Omni wheels (3x, at 120° intervals) -->
     <xacro:macro name="omni_wheel" params="name angle">
@@ -82,6 +102,9 @@
         <origin xyz="${0.23 * cos(angle)} ${0.23 * sin(angle)} -0.045" rpy="0 0 ${angle}"/>
         <axis xyz="0 1 0"/>
       </joint>
+      <gazebo reference="${prefix}${name}_wheel">
+        <material>Gazebo/Black</material>
+      </gazebo>
     </xacro:macro>
 
     <xacro:omni_wheel name="front" angle="${0}"/>
@@ -109,6 +132,9 @@
       <child link="${prefix}imu_link"/>
       <origin xyz="0 0 0.05" rpy="0 0 0"/>
     </joint>
+    <gazebo reference="${prefix}imu_link">
+      <material>Gazebo/Red</material>
+    </gazebo>
 
   </xacro:macro>
 </robot>

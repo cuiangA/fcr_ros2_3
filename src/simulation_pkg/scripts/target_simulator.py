@@ -22,6 +22,11 @@ from visualization_msgs.msg import Marker
 from vision_servo_msgs.msg import Target, TargetArray
 import math
 
+try:
+    from gazebo_msgs.msg import ModelState
+except ImportError:
+    ModelState = None
+
 
 class TargetSimulator(Node):
     """
@@ -51,11 +56,25 @@ class TargetSimulator(Node):
         self.declare_parameter("height", 1.0)
         self.declare_parameter("publish_target_array", False)
         self.declare_parameter("camera_frame", "camera_link")
+        self.declare_parameter("publish_gazebo_model_state", True)
+        self.declare_parameter("gazebo_model_name", "target_box")
 
         # ── 2. 创建发布者 ──────────────────────────────────────────
         # 队列深度 10：允许短暂的处理抖动而不丢失目标数据
         self.pose_pub = self.create_publisher(PoseStamped, "/target/pose", 10)
         self.marker_pub = self.create_publisher(Marker, "/target/marker", 10)
+        if self.get_parameter("publish_gazebo_model_state").value:
+            if ModelState is None:
+                self.get_logger().warning(
+                    "gazebo_msgs 不可用，跳过 Gazebo 可见目标同步")
+                self.model_state_pub = None
+            else:
+                self.model_state_pub = self.create_publisher(
+                    ModelState, "/gazebo/set_model_state", 10)
+                self.gazebo_model_name = self.get_parameter("gazebo_model_name").value
+        else:
+            self.model_state_pub = None
+
         if self.get_parameter("publish_target_array").value:
             self.target3d_pub = self.create_publisher(
                 TargetArray, "/perception/targets_3d", 10)
@@ -103,6 +122,7 @@ class TargetSimulator(Node):
         pose.pose.position.x = x
         pose.pose.position.y = y
         pose.pose.position.z = h
+        pose.pose.orientation.w = 1.0
         self.pose_pub.publish(pose)
 
         # ── 组装并发布 Marker 消息，用于 RViz 可视化 ───────────────
@@ -115,7 +135,15 @@ class TargetSimulator(Node):
         marker.color.r = 1.0                # 红色，突出显示
         self.marker_pub.publish(marker)
 
-        # ── 4. 可选：发布 3D 目标位姿（直连伺服控制回路）──────────
+        # ── 4. 同步 Gazebo 中的可见目标模型 ───────────────────────
+        if self.model_state_pub is not None:
+            state = ModelState()
+            state.model_name = self.gazebo_model_name
+            state.pose = pose.pose
+            state.reference_frame = "world"
+            self.model_state_pub.publish(state)
+
+        # ── 5. 可选：发布 3D 目标位姿（直连伺服控制回路）──────────
         if self.target3d_pub is not None:
             target = Target()
             target.class_name = "target"
