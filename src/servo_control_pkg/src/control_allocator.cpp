@@ -11,11 +11,14 @@
  *   4. 当云台角速度接近零时（< 0.001 rad/s），设置 hold 标志锁定当前位置
  *
  * 速度向量约定：
- *   camera_velocity = [vx, vy, vz, wx, wy, wz]
- *   vx: 相机右向平移 → 底盘横向
- *   vz: 相机前向平移 → 底盘前向
- *   wy: 相机俯仰角速度 → 云台 pitch
- *   wz: 相机偏航角速度 → 云台 yaw + 底盘 yaw
+ *   camera_velocity = [vx, vy, vz, wx, wy, wz]，位于 ROS optical frame：
+ *   x 右、y 下、z 前。底盘命令位于 base_link：x 前、y 左、z 上。
+ *
+ *   base_x   =  camera_z
+ *   base_y   = -camera_x
+ *   base_yaw = -camera_wy
+ *   gimbal_pitch ≈ -camera_wx
+ *   camera_wz 为光轴 roll，当前 MVP 暂不分配给执行器。
  */
 
 #include "servo_control_pkg/control_allocator.hpp"
@@ -52,9 +55,13 @@ ControlAllocation ControlAllocator::allocate(
 
   ControlAllocation cmd;
 
-  // ── 旋转分配：云台处理高频旋转，底盘处理低频旋转 ─────────────────
-  double pitch_rate = camera_velocity(4);  // wy：相机坐标系 Y 轴旋转
-  double yaw_rate = camera_velocity(5);    // wz：相机坐标系 Z 轴旋转
+  // ── 坐标映射：camera_optical_link -> base_link ──────────────────
+  // optical frame: x right, y down, z forward
+  // base_link:     x forward, y left, z up
+  const double base_forward = camera_velocity(2);
+  const double base_lateral = -camera_velocity(0);
+  const double yaw_rate = -camera_velocity(4);
+  const double pitch_rate = -camera_velocity(3);
 
   // 云台取 (1 - ratio) 的旋转分量（快速响应、高精度）
   cmd.gimbal_yaw_rate = std::clamp(yaw_rate * (1.0 - allocation_ratio_),
@@ -67,11 +74,11 @@ ControlAllocation ControlAllocator::allocate(
                                            -chassis_angular_limit_, chassis_angular_limit_);
 
   // ── 平移分配：全部由底盘执行 ────────────────────────────────────
-  // camera_velocity(2) = 前向 (z), camera_velocity(0) = 横向 (x)
   // camera_velocity(1) 是相机垂向平移，平面底盘无法执行，当前 MVP 忽略。
-  cmd.chassis_twist.linear.x = std::clamp(camera_velocity(2),
+  // camera_velocity(5) 是光轴 roll，当前 MVP 也不分配。
+  cmd.chassis_twist.linear.x = std::clamp(base_forward,
                                           -chassis_linear_limit_, chassis_linear_limit_);
-  cmd.chassis_twist.linear.y = std::clamp(camera_velocity(0),
+  cmd.chassis_twist.linear.y = std::clamp(base_lateral,
                                           -chassis_linear_limit_, chassis_linear_limit_);
 
   // ── 云台指令平滑（一阶低通滤波器） ──────────────────────────────

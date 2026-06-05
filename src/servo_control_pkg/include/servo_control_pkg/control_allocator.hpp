@@ -2,10 +2,14 @@
  * @file control_allocator.hpp
  * @brief 控制分配器 — 将相机 6-DOF 速度分解为底盘 + 云台指令。
  *
- * 核心问题：视觉伺服控制器输出的是相机坐标系下的 6 自由度速度
- * [vx,vy,vz,ωx,ωy,ωz]，但实际执行器是：
+ * 核心问题：视觉伺服控制器输出的是 camera_optical_link 下的 6 自由度速度
+ * [vx,vy,vz,ωx,ωy,ωz]，但实际执行器命令位于 base_link：
  *   - 底盘（3 自由度：vx, vy, ω）—— 平面运动
  *   - 云台（2 自由度：yaw_rate, pitch_rate）—— 旋转
+ *
+ * 当前 MVP 使用 ROS optical frame 到 base_link 的固定轴映射：
+ *   base_x = camera_z, base_y = -camera_x, base_yaw = -camera_wy
+ *   gimbal_pitch ≈ -camera_wx，camera_wz(roll) 暂不分配。
  *
  * 分配策略（PRIORITY 模式）：
  *   - 旋转由云台优先处理：云台响应快、精度高，适合高频小角度调节

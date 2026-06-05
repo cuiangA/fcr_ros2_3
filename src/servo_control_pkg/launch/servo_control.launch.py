@@ -18,7 +18,7 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -33,6 +33,10 @@ def generate_launch_description():
     config_dir = PathJoinSubstitution([
         FindPackageShare("servo_control_pkg"), "config"
     ])
+    controller_params_file = PythonExpression([
+        "'pbvs_params.yaml' if '", controller_plugin,
+        "'.endswith('PBVSController') else 'ibvs_params.yaml'"
+    ])
 
     # ── 伺服管理节点（主控制回路） ─────────────────────────────────
     servo_manager = Node(
@@ -41,7 +45,7 @@ def generate_launch_description():
         name="servo_manager",
         output="screen",
         parameters=[
-            PathJoinSubstitution([config_dir, "ibvs_params.yaml"]),
+            PathJoinSubstitution([config_dir, controller_params_file]),
             PathJoinSubstitution([config_dir, "allocator_params.yaml"]),
             {"controller_plugin": controller_plugin,
              "allocation_ratio": allocation_ratio,

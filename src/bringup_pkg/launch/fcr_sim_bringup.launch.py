@@ -18,7 +18,7 @@ ROS2 控制层负责：目标生成、视觉伺服、平台状态聚合
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -38,6 +38,10 @@ def generate_launch_description():
 
     servo_config = PathJoinSubstitution([servo_share, "config"])
     platform_config = PathJoinSubstitution([platform_share, "config"])
+    controller_params_file = PythonExpression([
+        "'pbvs_params.yaml' if '", controller_plugin,
+        "'.endswith('PBVSController') else 'ibvs_params.yaml'"
+    ])
 
     # ── 阶段 1（t=0s）：Gazebo + 机器人模型 + RViz ────────────────
     # Gazebo 加载世界、生成机器人模型，URDF 内置的 planar_move / IMU / 深度相机插件自动启动
@@ -62,6 +66,8 @@ def generate_launch_description():
     )
 
     # 目标仿真器：直出 3D 位姿 TargetArray（绕过感知管线）
+    # 目标在 odom 中运动；TargetArray 通过 TF 投影到 camera_optical_link，
+    # 因而机器人运动会真实改变视觉误差，形成可调试闭环。
     target_sim = Node(
         package="simulation_pkg",
         executable="target_simulator.py",
@@ -73,6 +79,8 @@ def generate_launch_description():
             "speed": speed,
             "height": height,
             "radius": radius,
+            "world_frame": "odom",
+            "camera_frame": "camera_optical_link",
         }],
     )
 
@@ -83,7 +91,7 @@ def generate_launch_description():
         name="servo_manager",
         output="screen",
         parameters=[
-            PathJoinSubstitution([servo_config, "ibvs_params.yaml"]),
+            PathJoinSubstitution([servo_config, controller_params_file]),
             PathJoinSubstitution([servo_config, "allocator_params.yaml"]),
             {"controller_plugin": controller_plugin,
              "allocation_ratio": allocation_ratio,
@@ -132,7 +140,7 @@ def generate_launch_description():
                               description="目标轨迹类型: circle, line, figure8"),
         DeclareLaunchArgument("speed", default_value="0.3",
                               description="轨迹速度"),
-        DeclareLaunchArgument("height", default_value="1.0",
+        DeclareLaunchArgument("height", default_value="0.35",
                               description="目标高度 (m)"),
         DeclareLaunchArgument("radius", default_value="1.0",
                               description="轨迹半径 (m)"),

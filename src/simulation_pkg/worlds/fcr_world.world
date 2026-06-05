@@ -28,7 +28,7 @@
     <!-- Add some objects for target tracking -->
     <model name="target_box">
       <static>false</static>
-      <pose>1 0 1.0 0 0 0</pose>
+      <pose>1 0 0.35 0 0 0</pose>
       <link name="box_link">
         <gravity>false</gravity>
         <visual name="visual">

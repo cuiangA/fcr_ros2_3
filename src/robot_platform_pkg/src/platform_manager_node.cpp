@@ -89,7 +89,8 @@ private:
   void publish_state() {
     vision_servo_msgs::msg::PlatformState state;
     state.header.stamp = this->now();
-    state.header.frame_id = "base_link";  // 以机器人本体坐标系为参考
+    state.header.frame_id = last_odom_.header.frame_id.empty()
+      ? "odom" : last_odom_.header.frame_id;  // chassis_pose 位于 odom frame
 
     // ── 底盘状态（来自里程计） ────────────────────────────────────
     state.chassis_pose[0] = last_odom_.pose.pose.position.x;
