@@ -29,6 +29,7 @@
 #include <vision_servo_msgs/srv/set_servo_mode.hpp>
 #include <vision_servo_msgs/action/visual_servo.hpp>
 #include <builtin_interfaces/msg/time.hpp>
+#include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <pluginlib/class_loader.hpp>
@@ -62,6 +63,7 @@ public:
     this->declare_parameter("chassis_angular_limit", 2.0);
     this->declare_parameter("auto_start", false);
     this->declare_parameter("target_timeout", 0.5);
+    this->declare_parameter("publish_unstamped_cmd_vel", false);
 
     // 控制器公共参数。插件由 servo_manager 下发参数，避免 pluginlib Node
     // 名称与 YAML 节点名不一致导致调参失效。
@@ -80,6 +82,8 @@ public:
     std::string plugin_name = this->get_parameter("controller_plugin").as_string();
     auto_start_ = this->get_parameter("auto_start").as_bool();
     target_timeout_ = this->get_parameter("target_timeout").as_double();
+    publish_unstamped_cmd_vel_ =
+      this->get_parameter("publish_unstamped_cmd_vel").as_bool();
 
     // 使用 pluginlib::ClassLoader 动态加载控制器共享库
     try {
@@ -121,6 +125,10 @@ public:
     // ── 4. 发布者 ─────────────────────────────────────────────────
     chassis_cmd_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>(
       "/cmd_vel", qos::control_cmd());
+    if (publish_unstamped_cmd_vel_) {
+      chassis_cmd_unstamped_pub_ = this->create_publisher<geometry_msgs::msg::Twist>(
+        "/cmd_vel_unstamped", qos::control_cmd());
+    }
 
     gimbal_cmd_pub_ = this->create_publisher<vision_servo_msgs::msg::GimbalCmd>(
       "/cmd_gimbal", qos::control_cmd());
@@ -406,6 +414,7 @@ private:
     twist_stamped.header.frame_id = "base_link";
     twist_stamped.twist = allocation.chassis_twist;
     chassis_cmd_pub_->publish(twist_stamped);
+    publish_unstamped_chassis_command(allocation.chassis_twist);
 
     // 步骤 4：发布云台指令
     vision_servo_msgs::msg::GimbalCmd gimbal_cmd;
@@ -454,12 +463,19 @@ private:
     twist_stamped.header.stamp = stamp;
     twist_stamped.header.frame_id = "base_link";
     chassis_cmd_pub_->publish(twist_stamped);
+    publish_unstamped_chassis_command(twist_stamped.twist);
 
     vision_servo_msgs::msg::GimbalCmd gimbal_cmd;
     gimbal_cmd.header.stamp = stamp;
     gimbal_cmd.hold_yaw = true;
     gimbal_cmd.hold_pitch = true;
     gimbal_cmd_pub_->publish(gimbal_cmd);
+  }
+
+  void publish_unstamped_chassis_command(const geometry_msgs::msg::Twist& twist) {
+    if (chassis_cmd_unstamped_pub_) {
+      chassis_cmd_unstamped_pub_->publish(twist);
+    }
   }
 
   void publish_lost_state(const rclcpp::Time& stamp) {
@@ -550,6 +566,7 @@ private:
   std::atomic_bool servo_active_{false};              ///< 伺服动作是否活跃
   bool auto_start_ = false;                           ///< 有目标时自动启动控制
   double target_timeout_ = 0.5;                       ///< 目标消息超时时间 (s)
+  bool publish_unstamped_cmd_vel_ = false;            ///< 仿真插件使用的 Twist 输出开关
   std::mutex state_mutex_;                            ///< 保护目标、平台和控制器状态
 
   // ── 订阅者 ──────────────────────────────────────────────────────
@@ -559,6 +576,7 @@ private:
 
   // ── 发布者 ──────────────────────────────────────────────────────
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr chassis_cmd_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr chassis_cmd_unstamped_pub_;
   rclcpp::Publisher<vision_servo_msgs::msg::GimbalCmd>::SharedPtr gimbal_cmd_pub_;
   rclcpp::Publisher<vision_servo_msgs::msg::ServoState>::SharedPtr servo_state_pub_;
 

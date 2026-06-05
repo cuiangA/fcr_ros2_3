@@ -7,7 +7,7 @@ ROS2 控制层负责：目标生成、视觉伺服、平台状态聚合
 
 数据流：
   target_sim → /perception/targets_3d → servo_manager → /cmd_vel_stamped
-                                                        → twist_stamped_to_twist → /cmd_vel
+                                                        → /cmd_vel
                                                         → Gazebo planar_move 插件驱动机器人移动
                                                         → /cmd_gimbal → gimbal_driver(仿真)
 
@@ -87,24 +87,13 @@ def generate_launch_description():
             PathJoinSubstitution([servo_config, "allocator_params.yaml"]),
             {"controller_plugin": controller_plugin,
              "allocation_ratio": allocation_ratio,
-             "auto_start": True},
+             "auto_start": True,
+             "publish_unstamped_cmd_vel": True},
         ],
         remappings=[
             ("/cmd_vel", "/cmd_vel_stamped"),
+            ("/cmd_vel_unstamped", "/cmd_vel"),
         ],
-    )
-
-    # Gazebo planar_move 插件订阅 geometry_msgs/Twist；控制层内部仍保留
-    # TwistStamped，便于真机链路和日志携带时间戳。
-    cmd_vel_adapter = Node(
-        package="simulation_pkg",
-        executable="twist_stamped_to_twist.py",
-        name="twist_stamped_to_twist",
-        output="screen",
-        parameters=[{
-            "input_topic": "/cmd_vel_stamped",
-            "output_topic": "/cmd_vel",
-        }],
     )
 
     # 云台驱动（仿真模式）。
@@ -130,7 +119,7 @@ def generate_launch_description():
 
     fcr_nodes = [
         camera_sim, target_sim, servo_manager,
-        cmd_vel_adapter, gimbal_driver, platform_mgr,
+        gimbal_driver, platform_mgr,
     ]
 
     return LaunchDescription([
