@@ -22,6 +22,7 @@
 #include <memory>
 #include <deque>
 #include <map>
+#include <set>
 
 namespace perception_pkg {
 

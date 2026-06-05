@@ -36,6 +36,8 @@
   <exec_depend>joint_state_publisher</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>vision_servo_msgs</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
 
   <export>
     <!-- 声明构建类型为 ament_cmake，确保 colcon 使用正确的构建后端 -->

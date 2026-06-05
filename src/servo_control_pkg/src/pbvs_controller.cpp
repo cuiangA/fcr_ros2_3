@@ -16,6 +16,7 @@
 #include "servo_control_pkg/pbvs_controller.hpp"
 #include <pluginlib/class_list_macros.hpp>
 #include <cmath>
+#include <string>
 
 namespace servo_control_pkg {
 
@@ -32,6 +33,21 @@ PBVSController::PBVSController(const rclcpp::NodeOptions& options)
   rotational_gain_ = this->get_parameter("rotational_gain").as_double();
 }
 
+void PBVSController::configureFromNode(const rclcpp::Node& node) {
+  ServoControllerBase::configureFromNode(node);
+
+  auto get_double = [&node](const std::string& name, double fallback) {
+    double value = fallback;
+    if (node.has_parameter(name)) {
+      node.get_parameter(name, value);
+    }
+    return value;
+  };
+
+  translational_gain_ = get_double("translational_gain", translational_gain_);
+  rotational_gain_ = get_double("rotational_gain", rotational_gain_);
+}
+
 bool PBVSController::initialize(double fx, double fy, double cx, double cy,
                                  int width, int height) {
   if (!ServoControllerBase::initialize(fx, fy, cx, cy, width, height)) return false;
@@ -45,19 +61,41 @@ bool PBVSController::initialize(double fx, double fy, double cx, double cy,
   return true;
 }
 
+bool PBVSController::setGoalFromTarget(
+    const vision_servo_msgs::msg::Target& target,
+    double desired_depth,
+    double feature_tolerance) {
+  if (!ServoControllerBase::setGoalFromTarget(target, desired_depth, feature_tolerance)) {
+    return false;
+  }
+
+  desired_pose_ = targetToPose(target);
+  if (desired_depth > 0.0) {
+    desired_pose_.translation().z() = desired_depth;
+  }
+  desired_pose_set_ = true;
+  return true;
+}
+
 std::optional<Eigen::Matrix<double, 6, 1>> PBVSController::computeVelocity(
     const vision_servo_msgs::msg::Target& target, double dt) {
-  if (!initialized_) return std::nullopt;
+  (void)dt;
+  if (!initialized_ || !goal_configured_ || !desired_pose_set_) {
+    last_camera_velocity_.setZero();
+    return std::nullopt;
+  }
 
   // ── 步骤 1：提取特征 + 重建 3D 位姿 ────────────────────────────
   current_features_ = extractFeatures(target);
-  current_pose_ = reconstructPose(current_features_, target.position[2]);
+  current_pose_ = targetToPose(target);
 
   // ── 步骤 2：计算笛卡尔误差 ──────────────────────────────────────
   Eigen::Matrix<double, 6, 1> pose_error = computePoseError(current_pose_);
+  feature_error_ = pose_error;
 
   // ── 步骤 3：检查收敛 ────────────────────────────────────────────
   if (pose_error.norm() < goal_.feature_tolerance) {
+    last_camera_velocity_.setZero();
     return Eigen::Matrix<double, 6, 1>::Zero();  // 已收敛
   }
 
@@ -69,6 +107,7 @@ std::optional<Eigen::Matrix<double, 6, 1>> PBVSController::computeVelocity(
   velocity.tail<3>() = -rotational_gain_ * pose_error.tail<3>();
 
   iteration_count_++;
+  last_camera_velocity_ = velocity;
   return velocity;
 }
 
@@ -89,6 +128,23 @@ Eigen::Isometry3d PBVSController::reconstructPose(
   pose.linear() = Eigen::Matrix3d::Identity();
 
   return pose;
+}
+
+Eigen::Isometry3d PBVSController::targetToPose(
+    const vision_servo_msgs::msg::Target& target) {
+  const bool has_position =
+    std::isfinite(target.position[0]) &&
+    std::isfinite(target.position[1]) &&
+    std::isfinite(target.position[2]) &&
+    target.position[2] > 0.0f;
+
+  if (has_position) {
+    Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+    pose.translation() << target.position[0], target.position[1], target.position[2];
+    return pose;
+  }
+
+  return reconstructPose(extractFeatures(target), target.position[2]);
 }
 
 Eigen::Matrix<double, 6, 1> PBVSController::computePoseError(

@@ -29,6 +29,7 @@ endif()
 # ── 依赖声明 ──────────────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(vision_servo_msgs REQUIRED)   # TargetArray, ServoState, PlatformState
 find_package(geometry_msgs REQUIRED)        # Twist, Vector3
@@ -103,7 +104,7 @@ install(TARGETS control_allocator
 add_executable(servo_manager_node src/servo_manager_node.cpp)
 target_include_directories(servo_manager_node PRIVATE include)
 ament_target_dependencies(servo_manager_node
-  rclcpp rclcpp_components vision_servo_msgs geometry_msgs
+  rclcpp rclcpp_action rclcpp_components vision_servo_msgs geometry_msgs
   tf2_ros tf2_geometry_msgs pluginlib
 )
 target_link_libraries(servo_manager_node

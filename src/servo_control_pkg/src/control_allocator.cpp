@@ -10,12 +10,12 @@
  *   3. 云台指令经过一阶低通滤波器平滑（α = 0.3）
  *   4. 当云台角速度接近零时（< 0.001 rad/s），设置 hold 标志锁定当前位置
  *
- * 坐标系映射：
- *   相机坐标系 → 底盘/云台坐标系
- *   camera_velocity(0) = lateral  (y)  → chassis_twist.linear.y
- *   camera_velocity(1) = pitch   (ωy) → gimbal_pitch_rate
- *   camera_velocity(2) = yaw     (ωz) → gimbal_yaw_rate + chassis_twist.angular.z
- *   camera_velocity(3) = forward (x)  → chassis_twist.linear.x
+ * 速度向量约定：
+ *   camera_velocity = [vx, vy, vz, wx, wy, wz]
+ *   vx: 相机右向平移 → 底盘横向
+ *   vz: 相机前向平移 → 底盘前向
+ *   wy: 相机俯仰角速度 → 云台 pitch
+ *   wz: 相机偏航角速度 → 云台 yaw + 底盘 yaw
  */
 
 #include "servo_control_pkg/control_allocator.hpp"
@@ -47,26 +47,29 @@ ControlAllocation ControlAllocator::allocate(
     const Eigen::Matrix<double, 6, 1>& camera_velocity,
     const vision_servo_msgs::msg::PlatformState& platform_state,
     double dt) {
+  (void)platform_state;
+  (void)dt;
 
   ControlAllocation cmd;
 
   // ── 旋转分配：云台处理高频旋转，底盘处理低频旋转 ─────────────────
-  double vy = camera_velocity(1);  // 俯仰角速度（相机坐标系 Y 轴旋转）
-  double vz = camera_velocity(2);  // 偏航角速度（相机坐标系 Z 轴旋转）
+  double pitch_rate = camera_velocity(4);  // wy：相机坐标系 Y 轴旋转
+  double yaw_rate = camera_velocity(5);    // wz：相机坐标系 Z 轴旋转
 
   // 云台取 (1 - ratio) 的旋转分量（快速响应、高精度）
-  cmd.gimbal_yaw_rate = std::clamp(vz * (1.0 - allocation_ratio_),
+  cmd.gimbal_yaw_rate = std::clamp(yaw_rate * (1.0 - allocation_ratio_),
                                    -gimbal_yaw_limit_, gimbal_yaw_limit_);
-  cmd.gimbal_pitch_rate = std::clamp(vy * (1.0 - allocation_ratio_),
+  cmd.gimbal_pitch_rate = std::clamp(pitch_rate * (1.0 - allocation_ratio_),
                                      -gimbal_pitch_limit_, gimbal_pitch_limit_);
 
   // 底盘取 ratio 的偏航旋转分量（云台角度限位不足时由底盘转动补足）
-  cmd.chassis_twist.angular.z = std::clamp(vz * allocation_ratio_,
+  cmd.chassis_twist.angular.z = std::clamp(yaw_rate * allocation_ratio_,
                                            -chassis_angular_limit_, chassis_angular_limit_);
 
   // ── 平移分配：全部由底盘执行 ────────────────────────────────────
-  // camera_velocity(3) = 前向 (x), camera_velocity(0) = 横向 (y)
-  cmd.chassis_twist.linear.x = std::clamp(camera_velocity(3),
+  // camera_velocity(2) = 前向 (z), camera_velocity(0) = 横向 (x)
+  // camera_velocity(1) 是相机垂向平移，平面底盘无法执行，当前 MVP 忽略。
+  cmd.chassis_twist.linear.x = std::clamp(camera_velocity(2),
                                           -chassis_linear_limit_, chassis_linear_limit_);
   cmd.chassis_twist.linear.y = std::clamp(camera_velocity(0),
                                           -chassis_linear_limit_, chassis_linear_limit_);

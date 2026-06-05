@@ -74,7 +74,7 @@ def generate_launch_description():
         executable="rviz2",
         name="rviz2",
         arguments=["-d", PathJoinSubstitution([pkg_share, "rviz", "fcr_system.rviz"])],
-        condition=LaunchConfiguration("use_rviz"),
+        condition=IfCondition(LaunchConfiguration("use_rviz")),
     )
 
     # ── 5. Foxglove Bridge（可选 WebSocket 可视化） ────────
@@ -83,7 +83,7 @@ def generate_launch_description():
         executable="foxglove_bridge",
         name="foxglove_bridge",
         parameters=[{"port": 8765, "max_qos_depth": 10}],
-        condition=LaunchConfiguration("use_foxglove"),
+        condition=IfCondition(LaunchConfiguration("use_foxglove")),
     )
 
     # 分阶段启动：平台 → 感知 → 控制 → 可视化

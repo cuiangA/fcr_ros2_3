@@ -51,7 +51,7 @@ target_link_libraries(detection_node perception_qos)
 install(TARGETS detection_node DESTINATION lib/${PROJECT_NAME})
 
 # ── 跟踪节点（独立可执行文件） ────────────────────────────────────
-add_executable(tracking_node src/tracking_node.cpp)
+add_executable(tracking_node src/tracking_node.cpp src/multi_object_tracker.cpp)
 target_include_directories(tracking_node PRIVATE include)
 ament_target_dependencies(tracking_node
   rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge OpenCV
@@ -69,7 +69,7 @@ target_link_libraries(depth_estimator_node perception_qos)
 install(TARGETS depth_estimator_node DESTINATION lib/${PROJECT_NAME})
 
 # ── 可组合感知管线（共享库，支持零拷贝进程内通信） ────────────────
-add_library(perception_pipeline SHARED src/perception_pipeline.cpp)
+add_library(perception_pipeline SHARED src/perception_pipeline.cpp src/multi_object_tracker.cpp)
 target_include_directories(perception_pipeline PRIVATE include)
 ament_target_dependencies(perception_pipeline
   rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge image_transport OpenCV

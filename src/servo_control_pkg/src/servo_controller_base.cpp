@@ -14,7 +14,10 @@
  */
 
 #include "servo_control_pkg/servo_controller_base.hpp"
+#include <Eigen/SVD>
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace servo_control_pkg {
 
@@ -22,7 +25,7 @@ ServoControllerBase::ServoControllerBase(const std::string& node_name,
                                          const rclcpp::NodeOptions& options)
   : Node(node_name, options),
     fx_(0), fy_(0), cx_(0), cy_(0), width_(0), height_(0),
-    current_depth_(0), initialized_(false), iteration_count_(0),
+    current_depth_(0), initialized_(false), goal_configured_(false), iteration_count_(0),
     lambda_gain_(0.5), max_linear_vel_(1.0), max_angular_vel_(2.0)
 {
   // ── 声明基类参数（所有控制器共享） ──────────────────────────────
@@ -37,6 +40,30 @@ ServoControllerBase::ServoControllerBase(const std::string& node_name,
   max_angular_vel_ = this->get_parameter("max_angular_velocity").as_double();
   goal_.feature_tolerance = this->get_parameter("feature_tolerance").as_double();
   goal_.desired_depth = this->get_parameter("desired_depth").as_double();
+  goal_.max_linear_velocity = max_linear_vel_;
+  goal_.max_angular_velocity = max_angular_vel_;
+
+  goal_.desired_features.setZero();
+  current_features_.setZero();
+  feature_error_.setZero();
+  interaction_matrix_.setZero();
+  last_camera_velocity_.setZero();
+}
+
+void ServoControllerBase::configureFromNode(const rclcpp::Node& node) {
+  auto get_double = [&node](const std::string& name, double fallback) {
+    double value = fallback;
+    if (node.has_parameter(name)) {
+      node.get_parameter(name, value);
+    }
+    return value;
+  };
+
+  lambda_gain_ = get_double("lambda_gain", lambda_gain_);
+  max_linear_vel_ = get_double("max_linear_velocity", max_linear_vel_);
+  max_angular_vel_ = get_double("max_angular_velocity", max_angular_vel_);
+  goal_.feature_tolerance = get_double("feature_tolerance", goal_.feature_tolerance);
+  goal_.desired_depth = get_double("desired_depth", goal_.desired_depth);
   goal_.max_linear_velocity = max_linear_vel_;
   goal_.max_angular_velocity = max_angular_vel_;
 }
@@ -56,7 +83,60 @@ void ServoControllerBase::setDesiredFeatures(
   goal_.desired_features = desired;
   // 仅在指定正深度时更新期望深度（-1 表示保持当前值）
   if (depth > 0) goal_.desired_depth = depth;
+  goal_configured_ = true;
+  iteration_count_ = 0;
   RCLCPP_INFO(get_logger(), "期望特征已设置, depth=%.2f", goal_.desired_depth);
+}
+
+bool ServoControllerBase::setGoalFromTarget(
+    const vision_servo_msgs::msg::Target& target,
+    double desired_depth,
+    double feature_tolerance) {
+  if (!initialized_) {
+    RCLCPP_WARN(get_logger(), "控制器尚未初始化相机内参，无法设置伺服目标");
+    return false;
+  }
+
+  const double bbox_w = target.bbox[2] - target.bbox[0];
+  const double bbox_h = target.bbox[3] - target.bbox[1];
+  if (!std::isfinite(bbox_w) || !std::isfinite(bbox_h) ||
+      bbox_w <= 1.0 || bbox_h <= 1.0) {
+    RCLCPP_WARN(get_logger(), "目标 bbox 无效，拒绝设置伺服目标");
+    return false;
+  }
+
+  auto desired_target = target;
+  if (feature_tolerance > 0.0) {
+    goal_.feature_tolerance = feature_tolerance;
+  }
+
+  const double current_depth = target.position[2];
+  if (desired_depth > 0.0 && current_depth > 0.0) {
+    const double scale = std::clamp(current_depth / desired_depth, 0.1, 10.0);
+    const double center_x = (target.center[0] > 0.0f)
+      ? target.center[0] : 0.5 * (target.bbox[0] + target.bbox[2]);
+    const double center_y = (target.center[1] > 0.0f)
+      ? target.center[1] : 0.5 * (target.bbox[1] + target.bbox[3]);
+    const double desired_w = std::max(1.0, bbox_w * scale);
+    const double desired_h = std::max(1.0, bbox_h * scale);
+
+    desired_target.bbox = {
+      static_cast<float>(center_x - 0.5 * desired_w),
+      static_cast<float>(center_y - 0.5 * desired_h),
+      static_cast<float>(center_x + 0.5 * desired_w),
+      static_cast<float>(center_y + 0.5 * desired_h)
+    };
+    desired_target.center = {static_cast<float>(center_x), static_cast<float>(center_y)};
+    desired_target.position[2] = static_cast<float>(desired_depth);
+  }
+
+  setDesiredFeatures(extractFeatures(desired_target), desired_depth);
+  return true;
+}
+
+bool ServoControllerBase::isConverged() const {
+  return initialized_ && goal_configured_ &&
+         feature_error_.norm() < goal_.feature_tolerance;
 }
 
 Eigen::Matrix<double, 6, 6> ServoControllerBase::computeInteractionMatrix(
@@ -108,10 +188,29 @@ vision_servo_msgs::msg::ServoState ServoControllerBase::getServoState() const {
   state.norm_error = feature_error_.norm();          // 当前特征误差范数
   state.desired_norm_error = goal_.feature_tolerance; // 收敛阈值
   state.iteration_count = iteration_count_;
+  const auto now = this->now();
+  const int64_t now_ns = now.nanoseconds();
+  state.last_update.sec = static_cast<int32_t>(now_ns / 1000000000LL);
+  state.last_update.nanosec = static_cast<uint32_t>(now_ns % 1000000000LL);
+
+  for (size_t i = 0; i < 6; ++i) {
+    state.feature_error[i] = static_cast<float>(feature_error_(i));
+    state.camera_velocity[i] = static_cast<float>(last_camera_velocity_(i));
+  }
+
+  Eigen::JacobiSVD<Eigen::Matrix<double, 6, 6>> svd(interaction_matrix_);
+  const auto singular_values = svd.singularValues().cwiseAbs();
+  const double min_sv = singular_values.minCoeff();
+  const double max_sv = singular_values.maxCoeff();
+  state.condition_number = (min_sv > 1e-9)
+    ? static_cast<float>(max_sv / min_sv)
+    : std::numeric_limits<float>::infinity();
 
   // 状态机判定：
   //   IDLE → CONVERGING → TRACKING（误差在容差内时进入跟踪稳态）
   if (!initialized_) {
+    state.state = vision_servo_msgs::msg::ServoState::IDLE;
+  } else if (!goal_configured_) {
     state.state = vision_servo_msgs::msg::ServoState::IDLE;
   } else if (state.norm_error < goal_.feature_tolerance) {
     state.state = vision_servo_msgs::msg::ServoState::TRACKING;  // 已收敛，维持跟踪

@@ -34,6 +34,8 @@ public:
   std::optional<Eigen::Matrix<double, 6, 1>> computeVelocity(
     const vision_servo_msgs::msg::Target& target, double dt) override;
 
+  void configureFromNode(const rclcpp::Node& node) override;
+
   std::string getControllerType() const override { return "IBVS"; }
 
 private:

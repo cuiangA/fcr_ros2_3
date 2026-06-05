@@ -12,6 +12,7 @@
 #include "robot_platform_pkg/hardware_interfaces/imu_interface.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <stdexcept>
 
 namespace robot_platform_pkg {
 
@@ -43,14 +44,21 @@ public:
 
     bool use_sim = this->get_parameter("use_sim").as_bool();
     double rate = this->get_parameter("rate_hz").as_double();
+    std::string device = this->get_parameter("device").as_string();
+    int baudrate = this->get_parameter("baudrate").as_int();
 
     // ── 2. 实例化 IMU 后端（真实或仿真） ─────────────────────────
     if (use_sim) {
       imu_ = make_simulated_imu();               // 无需真实硬件
     } else {
       imu_ = make_bno055_imu();                  // BNO055 通过 I2C 连接
-      std::string device = this->get_parameter("device").as_string();
-      imu_->init(device, 0);                     // 0 = 使用默认波特率
+    }
+    if (!imu_) {
+      throw std::runtime_error(
+        "BNO055 真实 IMU 接口尚未实现；请使用 use_sim:=true 或补齐 make_bno055_imu()");
+    }
+    if (!imu_->init(device, baudrate)) {
+      throw std::runtime_error("IMU 接口初始化失败");
     }
 
     // ── 3. 使用 SensorDataQoS 创建发布者 ─────────────────────────
@@ -97,7 +105,13 @@ private:
  */
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<robot_platform_pkg::IMUDriverNode>());
+  try {
+    rclcpp::spin(std::make_shared<robot_platform_pkg::IMUDriverNode>());
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(rclcpp::get_logger("imu_driver"), "IMU 驱动启动失败: %s", e.what());
+    rclcpp::shutdown();
+    return 1;
+  }
   rclcpp::shutdown();
   return 0;
 }

@@ -1,6 +1,6 @@
 # servo_control_pkg/config/ibvs_params.yaml
 # IBVS（基于图像的视觉伺服）控制器参数
-ibvs_controller:
+servo_manager:
   ros__parameters:
     lambda_gain: 0.5              # 基础控制增益 λ（指数收敛速率）
     gain_max: 1.0                 # 自适应增益最大值

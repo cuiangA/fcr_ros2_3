@@ -49,6 +49,7 @@ install(PROGRAMS
   scripts/target_simulator.py
   scripts/camera_simulator.py
   scripts/mock_detector.py
+  scripts/twist_stamped_to_twist.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

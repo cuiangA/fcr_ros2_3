@@ -24,6 +24,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 #include <memory>
+#include <stdexcept>
 
 namespace robot_platform_pkg {
 
@@ -46,15 +47,21 @@ public:
     max_linear_vel_ = this->get_parameter("max_linear_velocity").as_double();
     max_angular_vel_ = this->get_parameter("max_angular_velocity").as_double();
     enable_estop_ = this->get_parameter("enable_emergency_stop").as_bool();
+    std::string device = this->get_parameter("serial_device").as_string();
+    int baudrate = this->get_parameter("baudrate").as_int();
 
     // ── 2. 创建底盘硬件接口（真实或仿真） ──────────────────────────
     if (use_sim) {
       chassis_ = make_simulated_chassis();       // 仿真模式，无需硬件
     } else {
       chassis_ = make_lekiwi_chassis();          // 真实 LEKIWI 底盘
-      std::string device = this->get_parameter("serial_device").as_string();
-      int baudrate = this->get_parameter("baudrate").as_int();
-      chassis_->init(device, baudrate);          // 打开串口连接
+    }
+    if (!chassis_) {
+      throw std::runtime_error(
+        "LEKIWI 真实底盘接口尚未实现；请使用 use_sim:=true 或补齐 make_lekiwi_chassis()");
+    }
+    if (!chassis_->init(device, baudrate)) {
+      throw std::runtime_error("底盘接口初始化失败");
     }
 
     // ── 3. 初始化运动学模型 ───────────────────────────────────────
@@ -154,7 +161,13 @@ private:
  */
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<robot_platform_pkg::ChassisDriverNode>());
+  try {
+    rclcpp::spin(std::make_shared<robot_platform_pkg::ChassisDriverNode>());
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(rclcpp::get_logger("chassis_driver"), "底盘驱动启动失败: %s", e.what());
+    rclcpp::shutdown();
+    return 1;
+  }
   rclcpp::shutdown();
   return 0;
 }

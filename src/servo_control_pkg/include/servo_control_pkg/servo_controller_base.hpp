@@ -26,6 +26,7 @@
 #include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <Eigen/Dense>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace servo_control_pkg {
@@ -70,11 +71,34 @@ public:
                           int width, int height);
 
   /**
+   * @brief 从宿主节点读取控制器参数。
+   *
+   * 控制器由 pluginlib 创建，不会自动接收 servo_manager 的 YAML 参数。
+   * servo_manager 在加载或切换插件后显式调用该方法下发参数。
+   */
+  virtual void configureFromNode(const rclcpp::Node& node);
+
+  /**
    * @brief 设置期望的视觉特征（示教模式：teaching-by-showing）。
    * @param desired 期望特征向量（6 维归一化图像特征）
    * @param depth   期望深度 (m)，-1 表示保持当前深度
    */
   virtual void setDesiredFeatures(const Eigen::Matrix<double, 6, 1>& desired, double depth);
+
+  /**
+   * @brief 用当前目标观测生成一个伺服目标。
+   * @param target 当前目标观测
+   * @param desired_depth 期望深度，<=0 表示保持当前尺度/深度
+   * @param feature_tolerance 本次任务收敛阈值，<=0 使用参数默认值
+   */
+  virtual bool setGoalFromTarget(
+    const vision_servo_msgs::msg::Target& target,
+    double desired_depth,
+    double feature_tolerance);
+
+  bool hasGoal() const { return goal_configured_; }
+  double getCurrentErrorNorm() const { return feature_error_.norm(); }
+  bool isConverged() const;
 
   /**
    * @brief 主控制迭代：根据当前目标观测计算相机速度。
@@ -130,7 +154,9 @@ protected:
   Eigen::Matrix<double, 6, 6> interaction_matrix_;     ///< 当前交互矩阵 L
   double current_depth_;                               ///< 当前目标深度 (m)
   bool initialized_;                                   ///< 标定是否完成
+  bool goal_configured_;                               ///< 是否已有有效伺服目标
   int iteration_count_;                                ///< 控制迭代计数
+  Eigen::Matrix<double, 6, 1> last_camera_velocity_;   ///< 最近一次控制输出
 
   // ── 控制参数 ────────────────────────────────────────────────────
   double lambda_gain_;     ///< 指数衰减增益（IBVS 的 λ）

@@ -15,6 +15,7 @@
 #include "robot_platform_pkg/utils/can_utils.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
+#include <stdexcept>
 
 namespace robot_platform_pkg {
 
@@ -30,15 +31,21 @@ public:
     this->declare_parameter("can_id", static_cast<int>(DJIRS2Protocol::DEFAULT_CAN_ID));
 
     bool use_sim = this->get_parameter("use_sim").as_bool();
+    std::string can_if = this->get_parameter("can_interface").as_string();
+    int can_id = this->get_parameter("can_id").as_int();
 
     // ── 2. 创建云台硬件接口（真实或仿真） ──────────────────────────
     if (use_sim) {
       gimbal_ = make_simulated_gimbal();          // 仿真模式，无需硬件
     } else {
       gimbal_ = make_dji_rs2_gimbal();            // 真实 DJI RS2 云台
-      std::string can_if = this->get_parameter("can_interface").as_string();
-      int can_id = this->get_parameter("can_id").as_int();
-      gimbal_->init(can_if, can_id);              // 打开 CAN 总线连接
+    }
+    if (!gimbal_) {
+      throw std::runtime_error(
+        "DJI RS2 真实云台接口尚未实现；请使用 use_sim:=true 或补齐 make_dji_rs2_gimbal()");
+    }
+    if (!gimbal_->init(can_if, can_id)) {
+      throw std::runtime_error("云台接口初始化失败");
     }
 
     // ── 3. 创建订阅者与定时器 ─────────────────────────────────────
@@ -82,7 +89,13 @@ private:
  */
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<robot_platform_pkg::GimbalDriverNode>());
+  try {
+    rclcpp::spin(std::make_shared<robot_platform_pkg::GimbalDriverNode>());
+  } catch (const std::exception& e) {
+    RCLCPP_FATAL(rclcpp::get_logger("gimbal_driver"), "云台驱动启动失败: %s", e.what());
+    rclcpp::shutdown();
+    return 1;
+  }
   rclcpp::shutdown();
   return 0;
 }

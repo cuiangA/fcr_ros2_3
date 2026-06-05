@@ -28,17 +28,28 @@
 #include <vision_servo_msgs/msg/platform_state.hpp>
 #include <vision_servo_msgs/srv/set_servo_mode.hpp>
 #include <vision_servo_msgs/action/visual_servo.hpp>
+#include <builtin_interfaces/msg/time.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <pluginlib/class_loader.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <thread>
 
 namespace servo_control_pkg {
 
 class ServoManagerNode : public rclcpp::Node {
 public:
+  using VisualServo = vision_servo_msgs::action::VisualServo;
+  using GoalHandleVisualServo = rclcpp_action::ServerGoalHandle<VisualServo>;
+
   explicit ServoManagerNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions())
     : Node("servo_manager", options)
   {
@@ -49,14 +60,33 @@ public:
     this->declare_parameter("gimbal_pitch_limit", M_PI_2);
     this->declare_parameter("chassis_linear_limit", 1.0);
     this->declare_parameter("chassis_angular_limit", 2.0);
+    this->declare_parameter("auto_start", false);
+    this->declare_parameter("target_timeout", 0.5);
+
+    // 控制器公共参数。插件由 servo_manager 下发参数，避免 pluginlib Node
+    // 名称与 YAML 节点名不一致导致调参失效。
+    this->declare_parameter("lambda_gain", 0.5);
+    this->declare_parameter("max_linear_velocity", 1.0);
+    this->declare_parameter("max_angular_velocity", 2.0);
+    this->declare_parameter("feature_tolerance", 0.01);
+    this->declare_parameter("desired_depth", 2.0);
+    this->declare_parameter("gain_max", 1.0);
+    this->declare_parameter("gain_min", 0.1);
+    this->declare_parameter("error_threshold_slow", 0.05);
+    this->declare_parameter("use_adaptive_gain", true);
+    this->declare_parameter("translational_gain", 0.5);
+    this->declare_parameter("rotational_gain", 0.3);
 
     std::string plugin_name = this->get_parameter("controller_plugin").as_string();
+    auto_start_ = this->get_parameter("auto_start").as_bool();
+    target_timeout_ = this->get_parameter("target_timeout").as_double();
 
     // 使用 pluginlib::ClassLoader 动态加载控制器共享库
     try {
       controller_loader_ = std::make_unique<pluginlib::ClassLoader<ServoControllerBase>>(
         "servo_control_pkg", "servo_control_pkg::ServoControllerBase");
       controller_ = controller_loader_->createSharedInstance(plugin_name);
+      controller_->configureFromNode(*this);
       RCLCPP_INFO(get_logger(), "已加载控制器插件: %s", plugin_name.c_str());
     } catch (const pluginlib::PluginlibException& e) {
       RCLCPP_ERROR(get_logger(), "控制器插件加载失败: %s", e.what());
@@ -106,9 +136,9 @@ public:
     // ── 6. 动作服务器 ─────────────────────────────────────────────
     servo_action_ = rclcpp_action::create_server<vision_servo_msgs::action::VisualServo>(
       this, "/servo/visual_servo",
-      [this](const auto&, auto goal) { return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE; },
-      [this](const auto&) { return rclcpp_action::CancelResponse::ACCEPT; },
-      std::bind(&ServoManagerNode::execute_servo, this, std::placeholders::_1));
+      std::bind(&ServoManagerNode::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
+      std::bind(&ServoManagerNode::handle_cancel, this, std::placeholders::_1),
+      std::bind(&ServoManagerNode::handle_accepted, this, std::placeholders::_1));
 
     // ── 7. 控制回路定时器（50 Hz = 20ms 周期） ────────────────────
     control_timer_ = this->create_wall_timer(
@@ -119,12 +149,26 @@ public:
                 plugin_name.c_str());
   }
 
+  ~ServoManagerNode() override {
+    servo_active_.store(false);
+    if (action_thread_.joinable()) {
+      action_thread_.join();
+    }
+  }
+
 private:
   /// 相机内参回调 — 收到标定信息后初始化控制器
   void camera_info_callback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
     if (!calibrated_) {
       // 提取针孔模型内参矩阵 K 的参数
       // K = [fx, 0, cx; 0, fy, cy; 0, 0, 1]
+      camera_fx_ = msg->k[0];
+      camera_fy_ = msg->k[4];
+      camera_cx_ = msg->k[2];
+      camera_cy_ = msg->k[5];
+      camera_width_ = static_cast<int>(msg->width);
+      camera_height_ = static_cast<int>(msg->height);
       controller_->initialize(msg->k[0], msg->k[4], msg->k[2], msg->k[5],
                               msg->width, msg->height);
       calibrated_ = true;
@@ -134,11 +178,21 @@ private:
   /// 目标回调 — 缓存最新目标，优先使用跟踪 ID 匹配的目标
   void target_callback(const vision_servo_msgs::msg::TargetArray::ConstSharedPtr& msg) {
     if (!msg->targets.empty()) {
+      std::lock_guard<std::mutex> lock(state_mutex_);
       last_target_ = msg;
+      last_target_time_ = this->now();
       // 优先使用跟踪器指定的目标，否则使用置信度最高的检测
       if (msg->tracking_id >= 0) {
+        bool found = false;
         for (auto& t : msg->targets) {
-          if (t.id == msg->tracking_id) { active_target_ = t; break; }
+          if (t.id == msg->tracking_id) {
+            active_target_ = t;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          active_target_ = msg->targets[0];
         }
       } else {
         active_target_ = msg->targets[0];  // 取第一个（通常已按置信度排序）
@@ -148,6 +202,7 @@ private:
 
   /// 平台状态回调 — 缓存最新平台状态（用于控制分配）
   void platform_callback(const vision_servo_msgs::msg::PlatformState::ConstSharedPtr& msg) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
     last_platform_state_ = *msg;
   }
 
@@ -168,27 +223,136 @@ private:
       "servo_control_pkg::IBVSController",  // 3: MPC（占位）
       "servo_control_pkg::IBVSController",  // 4: RL（占位）
     };
-    if (req->mode < 5) {
-      try {
-        controller_ = controller_loader_->createSharedInstance(plugin_map[req->mode]);
-        resp->success = true;
-        resp->message = "已切换到 " + std::string(plugin_map[req->mode]);
-        RCLCPP_INFO(get_logger(), "%s", resp->message.c_str());
-      } catch (const std::exception& e) {
-        resp->success = false;
-        resp->message = e.what();
+    if (req->mode >= 5) {
+      resp->success = false;
+      resp->message = "未知伺服模式: " + std::to_string(req->mode);
+      return;
+    }
+
+    try {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      controller_ = controller_loader_->createSharedInstance(plugin_map[req->mode]);
+      controller_->configureFromNode(*this);
+      if (calibrated_) {
+        controller_->initialize(camera_fx_, camera_fy_, camera_cx_, camera_cy_,
+                                camera_width_, camera_height_);
       }
+      if (servo_active_.load() && last_target_) {
+        controller_->setGoalFromTarget(
+          active_target_,
+          this->get_parameter("desired_depth").as_double(),
+          this->get_parameter("feature_tolerance").as_double());
+      }
+      resp->success = true;
+      resp->message = "已切换到 " + std::string(plugin_map[req->mode]);
+      RCLCPP_INFO(get_logger(), "%s", resp->message.c_str());
+    } catch (const std::exception& e) {
+      resp->success = false;
+      resp->message = e.what();
     }
   }
 
+  rclcpp_action::GoalResponse handle_goal(
+      const rclcpp_action::GoalUUID&,
+      std::shared_ptr<const VisualServo::Goal> goal) {
+    if (servo_active_.load()) {
+      RCLCPP_WARN(get_logger(), "已有 VisualServo 任务在执行，拒绝新目标");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (goal->feature_tolerance < 0.0f) {
+      RCLCPP_WARN(get_logger(), "feature_tolerance 不能为负数");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  }
+
+  rclcpp_action::CancelResponse handle_cancel(
+      const std::shared_ptr<GoalHandleVisualServo>) {
+    return rclcpp_action::CancelResponse::ACCEPT;
+  }
+
+  void handle_accepted(const std::shared_ptr<GoalHandleVisualServo> goal_handle) {
+    if (action_thread_.joinable()) {
+      action_thread_.join();
+    }
+    action_thread_ = std::thread(&ServoManagerNode::execute_servo, this, goal_handle);
+  }
+
   /// 伺服动作执行器（长周期任务，支持取消和反馈）
-  void execute_servo(const std::shared_ptr<rclcpp_action::ServerGoalHandle<
-      vision_servo_msgs::action::VisualServo>> goal_handle) {
-    servo_active_ = true;
-    auto result = std::make_shared<vision_servo_msgs::action::VisualServo::Result>();
-    // TODO：动作执行逻辑（目标位姿设置 → 误差收敛检测 → 完成）
-    servo_active_ = false;
-    goal_handle->succeed(result);
+  void execute_servo(const std::shared_ptr<GoalHandleVisualServo> goal_handle) {
+    const auto goal = goal_handle->get_goal();
+    auto result = std::make_shared<VisualServo::Result>();
+    const rclcpp::Time start_time = this->now();
+    const double timeout_sec = goal_timeout_seconds(*goal);
+
+    servo_active_.store(true);
+
+    while (rclcpp::ok()) {
+      if (goal_handle->is_canceling()) {
+        finish_action(goal_handle, result, false, "伺服任务已取消", true, start_time);
+        return;
+      }
+
+      bool configured = false;
+      {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (calibrated_ && last_target_) {
+          vision_servo_msgs::msg::Target selected;
+          if (select_target_locked(goal->target_id, goal->class_name, selected)) {
+            active_target_ = selected;
+            configured = controller_->setGoalFromTarget(
+              active_target_, goal->desired_depth, goal->feature_tolerance);
+          }
+        }
+      }
+
+      if (configured) {
+        break;
+      }
+
+      publish_action_feedback(goal_handle, 0.0f, vision_servo_msgs::msg::ServoState::LOST);
+      if ((this->now() - start_time).seconds() > timeout_sec) {
+        finish_action(goal_handle, result, false, "等待目标或相机标定超时", false, start_time);
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    while (rclcpp::ok()) {
+      if (goal_handle->is_canceling()) {
+        finish_action(goal_handle, result, false, "伺服任务已取消", true, start_time);
+        return;
+      }
+
+      auto state = vision_servo_msgs::msg::ServoState();
+      {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        state = controller_->getServoState();
+        if (!last_target_ || target_stale_locked(this->now())) {
+          state.state = vision_servo_msgs::msg::ServoState::LOST;
+        }
+      }
+
+      publish_action_feedback(goal_handle, state.norm_error, state.state);
+      if (state.state == vision_servo_msgs::msg::ServoState::TRACKING) {
+        result->success = true;
+        result->message = "伺服误差已收敛";
+        result->final_error = state.norm_error;
+        result->elapsed_time = static_cast<float>((this->now() - start_time).seconds());
+        servo_active_.store(false);
+        publish_zero_command(this->now());
+        goal_handle->succeed(result);
+        return;
+      }
+
+      if ((this->now() - start_time).seconds() > timeout_sec) {
+        finish_action(goal_handle, result, false, "伺服任务超时", false, start_time);
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    finish_action(goal_handle, result, false, "ROS2 已关闭", false, start_time);
   }
 
   /**
@@ -197,16 +361,41 @@ private:
    * 流程：目标 → computeVelocity() → allocate() → 发布指令
    */
   void control_loop() {
-    if (!calibrated_ || !last_target_) return;  // 未标定或无目标 → 跳过
-
     auto now = this->now();
+    std::lock_guard<std::mutex> lock(state_mutex_);
+
+    if (!calibrated_) return;  // 未标定 → 跳过
+    if (!last_target_ || target_stale_locked(now)) {
+      if (servo_active_.load()) {
+        publish_zero_command(now);
+        publish_lost_state(now);
+      }
+      return;
+    }
+
+    if (!servo_active_.load()) {
+      if (!auto_start_) return;
+      if (!controller_->hasGoal()) {
+        const double desired_depth = this->get_parameter("desired_depth").as_double();
+        const double tolerance = this->get_parameter("feature_tolerance").as_double();
+        if (!controller_->setGoalFromTarget(active_target_, desired_depth, tolerance)) {
+          publish_zero_command(now);
+          return;
+        }
+      }
+      servo_active_.store(true);
+    }
+
     double dt = (last_control_time_.nanoseconds() > 0)
       ? (now - last_control_time_).seconds() : 0.02;  // 默认 20ms
     last_control_time_ = now;
 
     // 步骤 1：计算相机期望速度
     auto cam_vel = controller_->computeVelocity(active_target_, dt);
-    if (!cam_vel) return;  // 未收敛或未初始化
+    if (!cam_vel) {
+      publish_zero_command(now);
+      return;  // 未初始化或未设置目标
+    }
 
     // 步骤 2：控制分配（相机速度 → 底盘 + 云台）
     auto allocation = allocator_.allocate(*cam_vel, last_platform_state_, dt);
@@ -228,9 +417,129 @@ private:
     gimbal_cmd_pub_->publish(gimbal_cmd);
 
     // 步骤 5：发布伺服状态（用于监控和调试）
+    publish_control_state(now, *cam_vel, allocation);
+  }
+
+  double goal_timeout_seconds(const VisualServo::Goal& goal) const {
+    const double timeout =
+      static_cast<double>(goal.timeout.sec) +
+      static_cast<double>(goal.timeout.nanosec) * 1e-9;
+    return timeout > 0.0 ? timeout : 30.0;
+  }
+
+  bool target_stale_locked(const rclcpp::Time& now) const {
+    if (last_target_time_.nanoseconds() == 0) return true;
+    return (now - last_target_time_).seconds() > target_timeout_;
+  }
+
+  bool select_target_locked(
+      int32_t target_id,
+      const std::string& class_name,
+      vision_servo_msgs::msg::Target& selected) const {
+    if (!last_target_) return false;
+
+    for (const auto& target : last_target_->targets) {
+      const bool id_match = target_id < 0 || target.id == target_id;
+      const bool class_match = class_name.empty() || target.class_name == class_name;
+      if (id_match && class_match) {
+        selected = target;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void publish_zero_command(const rclcpp::Time& stamp) {
+    geometry_msgs::msg::TwistStamped twist_stamped;
+    twist_stamped.header.stamp = stamp;
+    twist_stamped.header.frame_id = "base_link";
+    chassis_cmd_pub_->publish(twist_stamped);
+
+    vision_servo_msgs::msg::GimbalCmd gimbal_cmd;
+    gimbal_cmd.header.stamp = stamp;
+    gimbal_cmd.hold_yaw = true;
+    gimbal_cmd.hold_pitch = true;
+    gimbal_cmd_pub_->publish(gimbal_cmd);
+  }
+
+  void publish_lost_state(const rclcpp::Time& stamp) {
     auto servo_state = controller_->getServoState();
-    servo_state.header.stamp = now;
+    servo_state.header.stamp = stamp;
+    servo_state.last_update = time_to_msg(stamp);
+    servo_state.state = vision_servo_msgs::msg::ServoState::LOST;
     servo_state_pub_->publish(servo_state);
+  }
+
+  void publish_control_state(
+      const rclcpp::Time& stamp,
+      const Eigen::Matrix<double, 6, 1>& cam_vel,
+      const ControlAllocation& allocation) {
+    auto servo_state = controller_->getServoState();
+    servo_state.header.stamp = stamp;
+    servo_state.last_update = time_to_msg(stamp);
+    for (size_t i = 0; i < 6; ++i) {
+      servo_state.camera_velocity[i] = static_cast<float>(cam_vel(i));
+    }
+    servo_state.gimbal_velocity[0] = static_cast<float>(allocation.gimbal_yaw_rate);
+    servo_state.gimbal_velocity[1] = static_cast<float>(allocation.gimbal_pitch_rate);
+    servo_state.chassis_velocity[0] = static_cast<float>(allocation.chassis_twist.linear.x);
+    servo_state.chassis_velocity[1] = static_cast<float>(allocation.chassis_twist.linear.y);
+    servo_state.chassis_velocity[2] = static_cast<float>(allocation.chassis_twist.angular.z);
+    servo_state_pub_->publish(servo_state);
+  }
+
+  builtin_interfaces::msg::Time time_to_msg(const rclcpp::Time& stamp) const {
+    builtin_interfaces::msg::Time msg;
+    const int64_t ns = stamp.nanoseconds();
+    msg.sec = static_cast<int32_t>(ns / 1000000000LL);
+    msg.nanosec = static_cast<uint32_t>(ns % 1000000000LL);
+    return msg;
+  }
+
+  void publish_action_feedback(
+      const std::shared_ptr<GoalHandleVisualServo>& goal_handle,
+      float current_error,
+      uint8_t state) {
+    auto feedback = std::make_shared<VisualServo::Feedback>();
+    const double tolerance = this->get_parameter("feature_tolerance").as_double();
+    feedback->current_error = current_error;
+    feedback->servo_state = state;
+    feedback->progress = current_error <= tolerance
+      ? 1.0f
+      : static_cast<float>(std::clamp(tolerance / std::max<double>(current_error, tolerance),
+                                      0.0, 1.0));
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      const auto servo_state = controller_->getServoState();
+      feedback->camera_velocity = servo_state.camera_velocity;
+    }
+    goal_handle->publish_feedback(feedback);
+  }
+
+  void finish_action(
+      const std::shared_ptr<GoalHandleVisualServo>& goal_handle,
+      const std::shared_ptr<VisualServo::Result>& result,
+      bool success,
+      const std::string& message,
+      bool canceled,
+      const rclcpp::Time& start_time) {
+    auto now = this->now();
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      result->final_error = controller_ ? controller_->getCurrentErrorNorm() : 0.0f;
+    }
+    result->success = success;
+    result->message = message;
+    result->elapsed_time = static_cast<float>((now - start_time).seconds());
+    servo_active_.store(false);
+    publish_zero_command(now);
+    if (canceled) {
+      goal_handle->canceled(result);
+    } else if (success) {
+      goal_handle->succeed(result);
+    } else {
+      goal_handle->abort(result);
+    }
   }
 
   // ── 控制器 ──────────────────────────────────────────────────────
@@ -238,7 +547,10 @@ private:
   std::shared_ptr<ServoControllerBase> controller_;  ///< 当前活跃的控制器实例
   ControlAllocator allocator_;                        ///< 控制分配器
   bool calibrated_ = false;                           ///< 相机标定是否完成
-  bool servo_active_ = false;                         ///< 伺服动作是否活跃
+  std::atomic_bool servo_active_{false};              ///< 伺服动作是否活跃
+  bool auto_start_ = false;                           ///< 有目标时自动启动控制
+  double target_timeout_ = 0.5;                       ///< 目标消息超时时间 (s)
+  std::mutex state_mutex_;                            ///< 保护目标、平台和控制器状态
 
   // ── 订阅者 ──────────────────────────────────────────────────────
   rclcpp::Subscription<vision_servo_msgs::msg::TargetArray>::SharedPtr target_sub_;
@@ -253,6 +565,7 @@ private:
   // ── 服务与动作 ──────────────────────────────────────────────────
   rclcpp::Service<vision_servo_msgs::srv::SetServoMode>::SharedPtr servo_mode_srv_;
   rclcpp_action::Server<vision_servo_msgs::action::VisualServo>::SharedPtr servo_action_;
+  std::thread action_thread_;
 
   // ── 定时器 ──────────────────────────────────────────────────────
   rclcpp::TimerBase::SharedPtr control_timer_;  ///< 50 Hz 控制回路定时器
@@ -262,6 +575,10 @@ private:
   vision_servo_msgs::msg::Target active_target_;           ///< 当前伺服跟踪的目标
   vision_servo_msgs::msg::PlatformState last_platform_state_;
   rclcpp::Time last_control_time_;
+  rclcpp::Time last_target_time_;
+
+  double camera_fx_ = 0.0, camera_fy_ = 0.0, camera_cx_ = 0.0, camera_cy_ = 0.0;
+  int camera_width_ = 0, camera_height_ = 0;
 };
 
 }  // namespace servo_control_pkg

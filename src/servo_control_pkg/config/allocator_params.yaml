@@ -8,3 +8,5 @@ servo_manager:
     chassis_linear_limit: 1.0    # 底盘线速度限制 (m/s)
     chassis_angular_limit: 2.0   # 底盘角速度限制 (rad/s)
     controller_plugin: "servo_control_pkg::IBVSController"  # 默认控制器插件
+    auto_start: false            # false = 通过 VisualServo Action 启动闭环；仿真可覆盖为 true
+    target_timeout: 0.5          # 目标超时 (s)，超时后发布零指令

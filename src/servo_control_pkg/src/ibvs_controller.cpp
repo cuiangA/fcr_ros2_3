@@ -18,6 +18,7 @@
  */
 
 #include "servo_control_pkg/ibvs_controller.hpp"
+#include <Eigen/SVD>
 #include <pluginlib/class_list_macros.hpp>
 
 namespace servo_control_pkg {
@@ -39,10 +40,38 @@ IBVSController::IBVSController(const rclcpp::NodeOptions& options)
   use_adaptive_gain_ = this->get_parameter("use_adaptive_gain").as_bool();
 }
 
+void IBVSController::configureFromNode(const rclcpp::Node& node) {
+  ServoControllerBase::configureFromNode(node);
+
+  auto get_double = [&node](const std::string& name, double fallback) {
+    double value = fallback;
+    if (node.has_parameter(name)) {
+      node.get_parameter(name, value);
+    }
+    return value;
+  };
+  auto get_bool = [&node](const std::string& name, bool fallback) {
+    bool value = fallback;
+    if (node.has_parameter(name)) {
+      node.get_parameter(name, value);
+    }
+    return value;
+  };
+
+  gain_max_ = get_double("gain_max", gain_max_);
+  gain_min_ = get_double("gain_min", gain_min_);
+  error_threshold_slow_ = get_double("error_threshold_slow", error_threshold_slow_);
+  use_adaptive_gain_ = get_bool("use_adaptive_gain", use_adaptive_gain_);
+}
+
 std::optional<Eigen::Matrix<double, 6, 1>> IBVSController::computeVelocity(
     const vision_servo_msgs::msg::Target& target, double dt) {
+  (void)dt;
   // 未标定 → 无法计算
-  if (!initialized_) return std::nullopt;
+  if (!initialized_ || !goal_configured_) {
+    last_camera_velocity_.setZero();
+    return std::nullopt;
+  }
 
   // ── 步骤 1：提取当前特征 ────────────────────────────────────────
   current_features_ = extractFeatures(target);
@@ -54,6 +83,7 @@ std::optional<Eigen::Matrix<double, 6, 1>> IBVSController::computeVelocity(
   // ── 步骤 3：检查收敛 ────────────────────────────────────────────
   double error_norm = feature_error_.norm();
   if (error_norm < goal_.feature_tolerance) {
+    last_camera_velocity_.setZero();
     return Eigen::Matrix<double, 6, 1>::Zero();  // 已收敛，输出零速度
   }
 
@@ -63,16 +93,23 @@ std::optional<Eigen::Matrix<double, 6, 1>> IBVSController::computeVelocity(
   // ── 步骤 5-6：计算控制律 v = -λ · L⁺ · e ──────────────────────
   double lambda = use_adaptive_gain_ ? computeAdaptiveGain(error_norm) : lambda_gain_;
 
-  // 交互矩阵的伪逆（completeOrthogonalDecomposition 比 SVD 更快）
-  Eigen::Matrix<double, 6, 6> L_pinv = interaction_matrix_.completeOrthogonalDecomposition()
-                                        .pseudoInverse();
+  Eigen::JacobiSVD<Eigen::Matrix<double, 6, 6>> svd(
+    interaction_matrix_, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  Eigen::Matrix<double, 6, 1> singular_inv;
+  const auto singular_values = svd.singularValues();
+  for (int i = 0; i < singular_values.size(); ++i) {
+    singular_inv(i) = singular_values(i) > 1e-6 ? 1.0 / singular_values(i) : 0.0;
+  }
 
-  Eigen::Matrix<double, 6, 1> velocity = -lambda * L_pinv * feature_error_;
+  Eigen::Matrix<double, 6, 1> velocity =
+    -lambda * svd.matrixV() * singular_inv.asDiagonal() *
+    svd.matrixU().transpose() * feature_error_;
 
   // ── 步骤 7：限幅 ────────────────────────────────────────────────
   velocity = clampVelocity(velocity);
 
   iteration_count_++;
+  last_camera_velocity_ = velocity;
   return velocity;
 }
 

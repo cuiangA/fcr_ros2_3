@@ -28,6 +28,7 @@ def generate_launch_description():
     controller_plugin = LaunchConfiguration("controller_plugin")
     allocation_ratio = LaunchConfiguration("allocation_ratio")
     control_rate = LaunchConfiguration("control_rate")
+    auto_start = LaunchConfiguration("auto_start")
 
     config_dir = PathJoinSubstitution([
         FindPackageShare("servo_control_pkg"), "config"
@@ -43,7 +44,8 @@ def generate_launch_description():
             PathJoinSubstitution([config_dir, "ibvs_params.yaml"]),
             PathJoinSubstitution([config_dir, "allocator_params.yaml"]),
             {"controller_plugin": controller_plugin,
-             "allocation_ratio": allocation_ratio},
+             "allocation_ratio": allocation_ratio,
+             "auto_start": auto_start},
         ],
         remappings=[
             ("/perception/targets_3d", "/perception/targets_3d"),  # 输入：3D 目标位姿
@@ -78,6 +80,9 @@ def generate_launch_description():
         DeclareLaunchArgument("control_rate",
                               default_value="50.0",
                               description="控制回路频率 (Hz)"),
+        DeclareLaunchArgument("auto_start",
+                              default_value="false",
+                              description="是否在收到目标后自动启动闭环"),
         servo_manager,
         velocity_commander,
     ])

@@ -1,6 +1,6 @@
 # servo_control_pkg/config/pbvs_params.yaml
 # PBVS（基于位置的视觉伺服）控制器参数
-pbvs_controller:
+servo_manager:
   ros__parameters:
     translational_gain: 0.5       # 平动控制增益
     rotational_gain: 0.3         # 转动控制增益（通常比平动增益小，因为转动更灵敏）

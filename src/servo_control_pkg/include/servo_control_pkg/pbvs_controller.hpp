@@ -33,6 +33,13 @@ public:
 
   std::string getControllerType() const override { return "PBVS"; }
 
+  void configureFromNode(const rclcpp::Node& node) override;
+
+  bool setGoalFromTarget(
+    const vision_servo_msgs::msg::Target& target,
+    double desired_depth,
+    double feature_tolerance) override;
+
   bool initialize(double fx, double fy, double cx, double cy,
                   int width, int height) override;
 
@@ -44,6 +51,9 @@ private:
    * 实际生产中可使用 PnP（Perspective-n-Point）算法获得更精确的位姿。
    */
   Eigen::Isometry3d reconstructPose(const Eigen::Matrix<double, 6, 1>& features, double depth);
+
+  /// 优先使用 Target.position，缺失时回退到 bbox + depth 反投影。
+  Eigen::Isometry3d targetToPose(const vision_servo_msgs::msg::Target& target);
 
   /**
    * @brief 计算当前位姿与期望位姿之间的笛卡尔误差。
