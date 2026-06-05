@@ -81,6 +81,7 @@ void DetectionNode::image_callback(const sensor_msgs::msg::Image::ConstSharedPtr
 }
 
 vision_servo_msgs::msg::TargetArray DetectionNode::infer(const cv::Mat& frame) {
+  (void)frame;
   vision_servo_msgs::msg::TargetArray result;
   // [占位] 实际 YOLO 推理流程：
   //   1. 预处理：resize + normalize（将图像缩放到模型输入尺寸并归一化）
