@@ -50,7 +50,6 @@ ControlAllocation ControlAllocator::allocate(
     const Eigen::Matrix<double, 6, 1>& camera_velocity,
     const vision_servo_msgs::msg::PlatformState& platform_state,
     double dt) {
-  (void)platform_state;
   (void)dt;
 
   ControlAllocation cmd;
@@ -63,14 +62,53 @@ ControlAllocation ControlAllocator::allocate(
   const double yaw_rate = -camera_velocity(4);
   const double pitch_rate = -camera_velocity(3);
 
-  // 云台取 (1 - ratio) 的旋转分量（快速响应、高精度）
-  cmd.gimbal_yaw_rate = std::clamp(yaw_rate * (1.0 - allocation_ratio_),
+  // ── 云台限位感知的动态分配 ──────────────────────────────────────
+  // 当云台偏航角接近限位时，将更多偏航旋转分配到底盘
+  // yaw_limit_margin: 限位边界预留 15%（约 27°），在此区域内逐步切换到底盘
+  const double yaw_margin = 0.15 * gimbal_yaw_limit_;
+  const double pitch_margin = 0.15 * gimbal_pitch_limit_;
+
+  double gimbal_yaw = platform_state.gimbal_yaw;
+  double gimbal_pitch = platform_state.gimbal_pitch;
+
+  // 归一化限位饱和度 [0, 1]：0 = 居中，1 = 已到达限位
+  double yaw_saturation = std::abs(gimbal_yaw) / (gimbal_yaw_limit_ - yaw_margin);
+  yaw_saturation = std::clamp(yaw_saturation, 0.0, 1.0);
+  double pitch_saturation = std::abs(gimbal_pitch) / (gimbal_pitch_limit_ - pitch_margin);
+  pitch_saturation = std::clamp(pitch_saturation, 0.0, 1.0);
+
+  // 当云台接近限位时，将更多旋转路由到底盘
+  // yaw_factor: 分配给云台的偏航比例
+  //   - 云台居中 (saturation=0):  1.0 - allocation_ratio_（全部走云台）
+  //   - 云台限位 (saturation=1):  0（全部走底盘）
+  double yaw_factor = (1.0 - allocation_ratio_) * (1.0 - yaw_saturation);
+  double pitch_factor = (1.0 - allocation_ratio_) * (1.0 - pitch_saturation);
+
+  // 偏航方向感知：云台不应继续朝限位方向转动
+  bool yaw_at_positive_limit = (gimbal_yaw >= gimbal_yaw_limit_ - yaw_margin);
+  bool yaw_at_negative_limit = (gimbal_yaw <= -gimbal_yaw_limit_ + yaw_margin);
+  bool pitch_at_positive_limit = (gimbal_pitch >= gimbal_pitch_limit_ - pitch_margin);
+  bool pitch_at_negative_limit = (gimbal_pitch <= -gimbal_pitch_limit_ + pitch_margin);
+
+  // 如果云台已在正限位且指令继续要求正向转动，则不执行该方向
+  if ((yaw_at_positive_limit && yaw_rate > 0.0) ||
+      (yaw_at_negative_limit && yaw_rate < 0.0)) {
+    yaw_factor = 0.0;  // 云台已达限位，全部分配到底盘
+  }
+  if ((pitch_at_positive_limit && pitch_rate > 0.0) ||
+      (pitch_at_negative_limit && pitch_rate < 0.0)) {
+    pitch_factor = 0.0;  // 云台已达限位，无法继续（底盘不做俯仰补偿）
+  }
+
+  // 云台取 (1 - ratio) 的旋转分量，受饱和度缩放
+  cmd.gimbal_yaw_rate = std::clamp(yaw_rate * yaw_factor,
                                    -gimbal_yaw_limit_, gimbal_yaw_limit_);
-  cmd.gimbal_pitch_rate = std::clamp(pitch_rate * (1.0 - allocation_ratio_),
+  cmd.gimbal_pitch_rate = std::clamp(pitch_rate * pitch_factor,
                                      -gimbal_pitch_limit_, gimbal_pitch_limit_);
 
-  // 底盘取 ratio 的偏航旋转分量（云台角度限位不足时由底盘转动补足）
-  cmd.chassis_twist.angular.z = std::clamp(yaw_rate * allocation_ratio_,
+  // 底盘取剩余的偏航旋转分量（云台限位不足时由底盘转动补足）
+  double chassis_yaw_component = yaw_rate * (allocation_ratio_ + yaw_saturation * (1.0 - allocation_ratio_));
+  cmd.chassis_twist.angular.z = std::clamp(chassis_yaw_component,
                                            -chassis_angular_limit_, chassis_angular_limit_);
 
   // ── 平移分配：全部由底盘执行 ────────────────────────────────────

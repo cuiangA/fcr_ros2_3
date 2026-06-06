@@ -28,11 +28,18 @@ def generate_launch_description():
     # ── Gazebo 服务端 ─────────────────────────────────────────────
     # 用 bash -c 包装：先杀残留再启动，保证端口不冲突。
     # $0 = world_file 路径，由 LaunchConfiguration 在运行时替换
+    # libgazebo_ros_init.so:  初始化 ROS API 节点
+    # libgazebo_ros_state.so: 提供 /gazebo/set_entity_state 等状态话题
+    # libgazebo_ros_factory.so: 提供 spawn_entity 服务
     gazebo_server = ExecuteProcess(
         cmd=["bash", "-c",
              "pkill -9 gzserver gzclient 2>/dev/null || true; "
              "sleep 1; "
-             "exec gzserver --verbose -s libgazebo_ros_factory.so $0",
+             "exec gzserver --verbose "
+             "-s libgazebo_ros_init.so "
+             "-s libgazebo_ros_state.so "
+             "-s libgazebo_ros_factory.so "
+             "$0",
              world_file],
         output="screen",
     )

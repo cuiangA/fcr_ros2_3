@@ -23,6 +23,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 
 namespace robot_platform_pkg {
 
@@ -46,6 +47,11 @@ public:
     imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
       "/imu/data", sensor_qos,  // 传感器 QoS：允许丢帧，保证低延迟
       std::bind(&PlatformManagerNode::imu_callback, this, std::placeholders::_1));
+
+    // 订阅关节状态（用于读取云台角度）
+    joint_state_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
+      "/joint_states", rclcpp::QoS(10).reliable(),
+      std::bind(&PlatformManagerNode::joint_state_callback, this, std::placeholders::_1));
 
     // ── 3. 发布 PlatformState（TRANSIENT_LOCAL = 迟加入者也能获取） ─
     state_pub_ = this->create_publisher<vision_servo_msgs::msg::PlatformState>(
@@ -80,6 +86,17 @@ private:
     last_imu_ = *msg;
   }
 
+  /// 关节状态回调 — 从 /joint_states 中提取云台偏航/俯仰角度
+  void joint_state_callback(const sensor_msgs::msg::JointState::ConstSharedPtr& msg) {
+    for (size_t i = 0; i < msg->name.size(); ++i) {
+      if (msg->name[i] == "gimbal_yaw_joint") {
+        gimbal_yaw_ = msg->position[i];
+      } else if (msg->name[i] == "gimbal_pitch_joint") {
+        gimbal_pitch_ = msg->position[i];
+      }
+    }
+  }
+
   /**
    * @brief 状态发布回调 — 将缓存的底盘/IMU 状态聚合为 PlatformState 并发布。
    *
@@ -109,6 +126,12 @@ private:
     state.linear_acceleration[2] = last_imu_.linear_acceleration.z;
     state.orientation = last_imu_.orientation;  // IMU 融合后的姿态四元数
 
+    // ── 云台状态（来自关节状态） ──────────────────────────────────
+    state.gimbal_yaw = gimbal_yaw_;
+    state.gimbal_pitch = gimbal_pitch_;
+    state.gimbal_yaw_rate = 0.0f;    // TODO: 从关节速度计算
+    state.gimbal_pitch_rate = 0.0f;  // TODO: 从关节速度计算
+
     // ── 子系统连接状态 ────────────────────────────────────────────
     // TODO：生产环境中通过心跳包检测各子系统的真实连接状态
     state.chassis_connected = true;
@@ -121,6 +144,7 @@ private:
   // ── 订阅者与发布者 ──────────────────────────────────────────────
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
   rclcpp::Publisher<vision_servo_msgs::msg::PlatformState>::SharedPtr state_pub_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 
@@ -128,6 +152,8 @@ private:
   nav_msgs::msg::Odometry last_odom_;  ///< 最新里程计数据
   sensor_msgs::msg::Imu last_imu_;     ///< 最新 IMU 数据
   double current_yaw_ = 0.0;            ///< 从里程计四元数提取的当前偏航角 (rad)
+  double gimbal_yaw_ = 0.0;             ///< 云台偏航角 (rad)，来自 /joint_states
+  double gimbal_pitch_ = 0.0;           ///< 云台俯仰角 (rad)，来自 /joint_states
 };
 
 }  // namespace robot_platform_pkg

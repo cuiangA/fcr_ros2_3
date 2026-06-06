@@ -103,6 +103,9 @@ std::optional<Eigen::Matrix<double, 6, 1>> PBVSController::computeVelocity(
   Eigen::Matrix<double, 6, 1> velocity;
   // 前 3 维：平动速度 = -K_t · 位置误差
   velocity.head<3>() = -translational_gain_ * pose_error.head<3>();
+  // 深度轴 (z, index 2): 移动机器人上向前运动会减小目标在相机系中的 z 坐标
+  // （靠近目标），因此深度控制需要反向符号，避免正反馈导致机器人加速跑偏。
+  velocity(2) = translational_gain_ * pose_error(2);
   // 后 3 维：转动速度 = -K_r · 旋转误差（轴角表示）
   velocity.tail<3>() = -rotational_gain_ * pose_error.tail<3>();
 
@@ -139,8 +142,24 @@ Eigen::Isometry3d PBVSController::targetToPose(
     target.position[2] > 0.0f;
 
   if (has_position) {
+    double tx = target.position[0];  // 相机系: 右
+    double ty = target.position[1];  // 相机系: 下
+    double tz = target.position[2];  // 相机系: 前
+
     Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
-    pose.translation() << target.position[0], target.position[1], target.position[2];
+    pose.translation() << tx, ty, tz;
+
+    // 计算朝向目标的偏航角和俯仰角
+    // 偏航: 目标在水平面上的方位角
+    double yaw = std::atan2(tx, tz);
+    // 俯仰: 目标在垂直面上的仰角 (正值 = 目标在下方)
+    double pitch = std::atan2(ty, std::sqrt(tx * tx + tz * tz));
+
+    // 旋转矩阵: 先偏航 (绕相机系 Z 轴), 再俯仰 (绕相机系 Y 轴负向)
+    Eigen::AngleAxisd rot_yaw(yaw, Eigen::Vector3d::UnitZ());
+    Eigen::AngleAxisd rot_pitch(-pitch, Eigen::Vector3d::UnitY());
+    pose.linear() = (rot_yaw * rot_pitch).toRotationMatrix();
+
     return pose;
   }
 

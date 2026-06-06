@@ -17,20 +17,17 @@
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from rclpy.time import Time
 from geometry_msgs.msg import PoseStamped
-from sensor_msgs.msg import CameraInfo
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import JointState
 from visualization_msgs.msg import Marker
 from vision_servo_msgs.msg import Target, TargetArray
-from tf2_ros import Buffer, TransformListener
-from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
 import math
 
 try:
-    from gazebo_msgs.msg import ModelState
+    from gazebo_msgs.msg import EntityState
 except ImportError:
-    ModelState = None
+    EntityState = None
 
 
 class TargetSimulator(Node):
@@ -47,7 +44,7 @@ class TargetSimulator(Node):
       - trajectory (string, 默认 "circle"): 轨迹类型 (circle / figure8 / line)
       - radius     (float,  默认 1.0):     圆形/八字形的特征半径，单位米
       - speed      (float,  默认 0.5):     角速度或线速度，单位取决于轨迹类型
-      - height     (float,  默认 0.35):    目标在 Z 轴上的高度，单位米
+      - height     (float,  默认 1.0):     目标在 Z 轴上的高度，单位米
     """
 
     def __init__(self):
@@ -58,45 +55,24 @@ class TargetSimulator(Node):
         self.declare_parameter("trajectory", "circle")  # circle, line, figure8
         self.declare_parameter("radius", 1.0)
         self.declare_parameter("speed", 0.5)
-        self.declare_parameter("height", 0.35)
+        self.declare_parameter("height", 1.0)
         self.declare_parameter("publish_target_array", False)
-        self.declare_parameter("world_frame", "odom")
-        self.declare_parameter("camera_frame", "camera_optical_link")
-        self.declare_parameter("image_width", 640)
-        self.declare_parameter("image_height", 480)
-        self.declare_parameter("fx", 600.0)
-        self.declare_parameter("fy", 600.0)
-        self.declare_parameter("cx", 320.0)
-        self.declare_parameter("cy", 240.0)
-        self.declare_parameter("target_real_size", 0.30)
-        self.declare_parameter("min_depth", 0.15)
+        self.declare_parameter("camera_frame", "camera_link")
         self.declare_parameter("publish_gazebo_model_state", True)
         self.declare_parameter("gazebo_model_name", "target_box")
-
-        self.world_frame_ = self.get_parameter("world_frame").value
-        self.camera_frame_ = self.get_parameter("camera_frame").value
-        self.image_width_ = int(self.get_parameter("image_width").value)
-        self.image_height_ = int(self.get_parameter("image_height").value)
-        self.fx_ = float(self.get_parameter("fx").value)
-        self.fy_ = float(self.get_parameter("fy").value)
-        self.cx_ = float(self.get_parameter("cx").value)
-        self.cy_ = float(self.get_parameter("cy").value)
-        self.target_real_size_ = float(self.get_parameter("target_real_size").value)
-        self.min_depth_ = float(self.get_parameter("min_depth").value)
-        self._last_warnings = {}
 
         # ── 2. 创建发布者 ──────────────────────────────────────────
         # 队列深度 10：允许短暂的处理抖动而不丢失目标数据
         self.pose_pub = self.create_publisher(PoseStamped, "/target/pose", 10)
         self.marker_pub = self.create_publisher(Marker, "/target/marker", 10)
         if self.get_parameter("publish_gazebo_model_state").value:
-            if ModelState is None:
+            if EntityState is None:
                 self.get_logger().warning(
                     "gazebo_msgs 不可用，跳过 Gazebo 可见目标同步")
                 self.model_state_pub = None
             else:
                 self.model_state_pub = self.create_publisher(
-                    ModelState, "/gazebo/set_model_state", 10)
+                    EntityState, "/gazebo/set_entity_state", 10)
                 self.gazebo_model_name = self.get_parameter("gazebo_model_name").value
         else:
             self.model_state_pub = None
@@ -104,38 +80,111 @@ class TargetSimulator(Node):
         if self.get_parameter("publish_target_array").value:
             self.target3d_pub = self.create_publisher(
                 TargetArray, "/perception/targets_3d", 10)
-            camera_info_qos = QoSProfile(
-                depth=1,
-                reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL)
-            self.camera_info_sub = self.create_subscription(
-                CameraInfo, "/camera/camera_info",
-                self.camera_info_callback, camera_info_qos)
-            self.tf_buffer = Buffer()
-            self.tf_listener = TransformListener(self.tf_buffer, self)
+            self.camera_frame_ = self.get_parameter("camera_frame").value
         else:
             self.target3d_pub = None
-            self.camera_info_sub = None
-            self.tf_buffer = None
-            self.tf_listener = None
 
-        # ── 3. 50 Hz 更新频率 = 20ms 间隔，确保轨迹平滑 ────────────
+        # ── 3. 订阅 odometry 和 joint_states，用于计算相机坐标系下的目标位置 ─
+        self.robot_x = 0.0
+        self.robot_y = 0.0
+        self.robot_yaw = 0.0
+        self.gimbal_yaw = 0.0   # 云台偏航角 (rad)
+        self.gimbal_pitch = 0.0  # 云台俯仰角 (rad)
+
+        self.odom_sub = self.create_subscription(
+            Odometry, "/odom", self.odom_callback, 10)
+        self.joint_sub = self.create_subscription(
+            JointState, "/joint_states", self.joint_callback, 10)
+
+        # ── 4. 50 Hz 更新频率 = 20ms 间隔，确保轨迹平滑 ────────────
         self.timer = self.create_timer(0.02, self.update)
         self.t = 0.0  # 累计时间参数，驱动轨迹方程
 
-    def camera_info_callback(self, msg):
-        """缓存相机内参，保证虚拟检测与 servo_manager 使用同一套投影模型。"""
-        if msg.k[0] <= 0.0 or msg.k[4] <= 0.0:
-            self._warn_throttled("camera_info",
-                                 "收到无效 camera_info，继续使用目标模拟器默认内参")
-            return
+    def odom_callback(self, msg):
+        """里程计回调 — 缓存机器人当前位姿（odom 坐标系下）。"""
+        self.robot_x = msg.pose.pose.position.x
+        self.robot_y = msg.pose.pose.position.y
+        # 从四元数提取偏航角
+        q = msg.pose.pose.orientation
+        siny = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        self.robot_yaw = math.atan2(siny, cosy)
 
-        self.fx_ = float(msg.k[0])
-        self.fy_ = float(msg.k[4])
-        self.cx_ = float(msg.k[2])
-        self.cy_ = float(msg.k[5])
-        self.image_width_ = int(msg.width)
-        self.image_height_ = int(msg.height)
+    def joint_callback(self, msg):
+        """关节状态回调 — 缓存云台当前角度。"""
+        try:
+            idx_yaw = msg.name.index("gimbal_yaw_joint")
+            self.gimbal_yaw = msg.position[idx_yaw]
+        except ValueError:
+            pass
+        try:
+            idx_pitch = msg.name.index("gimbal_pitch_joint")
+            self.gimbal_pitch = msg.position[idx_pitch]
+        except ValueError:
+            pass
+
+    def transform_to_camera_frame(self, x, y, z):
+        """
+        将目标在 odom 坐标系下的位置转换到相机光心坐标系。
+
+        完整变换链:
+          1. odom → base_link (平移 + 绕 Z 轴反向旋转)
+          2. base_link → gimbal_yaw_link (减去云台偏航关节偏移 + 反向偏航旋转)
+          3. gimbal_yaw → gimbal_pitch_link (减去俯仰关节偏移 + 反向俯仰旋转)
+          4. gimbal_pitch → camera_link (减去相机安装偏移)
+          5. camera_link → camera_optical_link (轴重映射到 ROS 光学约定)
+
+        URDF 关节偏移量 (来自 lekiwi_gimbal.xacro):
+          base_link  → gimbal_yaw_joint:   (0, 0, 0.13)
+          yaw_link   → gimbal_pitch_joint: (0, 0, 0.10)
+          pitch_link → camera_joint:       (0.11, 0, 0)
+          camera_link → camera_optical:     rpy=(-π/2, 0, -π/2)
+
+        base_link:   x 向前, y 向左, z 向上
+        相机光心系:   z 向前(光轴), x 向右, y 向下
+
+        @param x, y, z: 目标在 odom 坐标系下的位置
+        @return [cam_x, cam_y, cam_z]: 目标在相机光心系下的位置
+        """
+        yaw = self.gimbal_yaw
+        pitch = self.gimbal_pitch
+
+        # ── 步骤 1: odom → base_link（R_z(-robot_yaw) 反向旋转）────
+        dx = x - self.robot_x
+        dy = y - self.robot_y
+        cy = math.cos(self.robot_yaw)
+        sy = math.sin(self.robot_yaw)
+        bx = dx * cy + dy * sy     # R_z(-yaw): x' =  x*cos + y*sin
+        by = -dx * sy + dy * cy    #           y' = -x*sin + y*cos
+        bz = z
+
+        # ── 步骤 2: base_link → gimbal_yaw 关节原点 + 反向偏航旋转 ─
+        pz = bz - 0.13             # 减去 yaw 关节 Z 偏移
+        cyaw = math.cos(yaw)
+        syaw = math.sin(yaw)
+        py2 = -bx * syaw + by * cyaw   # R_z(-yaw)
+        px2 =  bx * cyaw + by * syaw
+        pz2 = pz
+
+        # ── 步骤 3: yaw → pitch 关节原点 + 反向俯仰旋转 ────────────
+        pz3 = pz2 - 0.10           # 减去 pitch 关节 Z 偏移
+        cp = math.cos(pitch)
+        sp = math.sin(pitch)
+        px4 = px2 * cp - pz3 * sp   # R_y(-pitch)
+        py4 = py2
+        pz4 = px2 * sp + pz3 * cp
+
+        # ── 步骤 4: pitch → camera_link 原点（减去相机 X 偏移）────
+        px5 = px4 - 0.11
+
+        # ── 步骤 5: camera_link → camera_optical_link（轴重映射）───
+        # ROS 光学约定: z 向前(光轴), x 向右, y 向下
+        # camera_link 坐标系 → 光学: x_opt=-link_y, y_opt=-link_z, z_opt=link_x
+        cam_x = -py4               # 右方向
+        cam_y = -pz4               # 下方向
+        cam_z =  px5               # 前方向（含相机 X 偏移）
+
+        return [cam_x, cam_y, cam_z]
 
     def update(self):
         """
@@ -149,7 +198,7 @@ class TargetSimulator(Node):
         speed = self.get_parameter("speed").value
         h = self.get_parameter("height").value
 
-        # ── 根据轨迹类型计算目标在当前时刻的 X/Y 位置 ──────────────
+        # ── 根据轨迹类型计算目标在当前时刻的 X/Y 位置（odom 坐标系）──
         if traj == "circle":
             # 标准参数方程：x = r*cos(wt), y = r*sin(wt)
             x = r * math.cos(speed * self.t)
@@ -166,10 +215,10 @@ class TargetSimulator(Node):
 
         self.t += 0.02  # 与定时器周期保持一致
 
-        # ── 组装并发布 PoseStamped 消息 ────────────────────────────
+        # ── 组装并发布 PoseStamped 消息（odom 坐标系，RViz 可视化用） ──
         pose = PoseStamped()
         pose.header.stamp = self.get_clock().now().to_msg()
-        pose.header.frame_id = self.world_frame_  # 以世界/里程计坐标系为参考
+        pose.header.frame_id = "odom"  # 以里程计坐标系为参考
         pose.pose.position.x = x
         pose.pose.position.y = y
         pose.pose.position.z = h
@@ -186,121 +235,35 @@ class TargetSimulator(Node):
         marker.color.r = 1.0                # 红色，突出显示
         self.marker_pub.publish(marker)
 
-        # ── 4. 同步 Gazebo 中的可见目标模型 ───────────────────────
+        # ── 同步 Gazebo 中的可见目标模型（world 坐标系） ──────────
         if self.model_state_pub is not None:
-            state = ModelState()
-            state.model_name = self.gazebo_model_name
+            state = EntityState()
+            state.name = self.gazebo_model_name
             state.pose = pose.pose
             state.reference_frame = "world"
             self.model_state_pub.publish(state)
 
-        # ── 5. 可选：发布 3D 目标位姿（直连伺服控制回路）──────────
+        # ── 可选：发布 3D 目标位姿（直连伺服控制回路）──────────────
         if self.target3d_pub is not None:
-            target_array = self.build_virtual_camera_target(pose)
-            if target_array is not None:
-                self.target3d_pub.publish(target_array)
+            # 将目标位置从 odom 坐标系转换到相机光心坐标系
+            cam_pos = self.transform_to_camera_frame(x, y, h)
 
-    def build_virtual_camera_target(self, pose):
-        """将 odom 中的目标点通过 TF 投影成 camera optical frame 下的检测结果。"""
-        try:
-            transform = self.tf_buffer.lookup_transform(
-                self.camera_frame_, pose.header.frame_id, Time())
-        except (LookupException, ConnectivityException, ExtrapolationException) as exc:
-            self._warn_throttled(
-                "tf",
-                f"无法将目标从 {pose.header.frame_id} 变换到 {self.camera_frame_}: {exc}")
-            return None
-
-        x_cam, y_cam, z_cam = self._transform_point(
-            transform,
-            pose.pose.position.x,
-            pose.pose.position.y,
-            pose.pose.position.z)
-
-        return self._project_target(pose.header.stamp, x_cam, y_cam, z_cam)
-
-    def _project_target(self, stamp, x_cam, y_cam, z_cam):
-        if z_cam <= self.min_depth_:
-            self._warn_throttled(
-                "behind_camera",
-                f"目标不在相机前方或距离过近，z={z_cam:.2f}m，暂停发布伺服目标")
-            return None
-
-        u = self.fx_ * x_cam / z_cam + self.cx_
-        v = self.fy_ * y_cam / z_cam + self.cy_
-        if not all(math.isfinite(value) for value in (u, v, z_cam)):
-            self._warn_throttled("projection", "目标投影结果无效，暂停发布伺服目标")
-            return None
-
-        if u < 0.0 or u >= self.image_width_ or v < 0.0 or v >= self.image_height_:
-            self._warn_throttled(
-                "out_of_view",
-                f"目标中心超出相机视野 u={u:.1f}, v={v:.1f}，暂停发布伺服目标")
-            return None
-
-        bbox_size = max(2.0, self.fx_ * self.target_real_size_ / z_cam)
-        half = 0.5 * bbox_size
-        x_min = max(0.0, u - half)
-        y_min = max(0.0, v - half)
-        x_max = min(float(self.image_width_ - 1), u + half)
-        y_max = min(float(self.image_height_ - 1), v + half)
-        bbox_w = x_max - x_min
-        bbox_h = y_max - y_min
-        if bbox_w <= 1.0 or bbox_h <= 1.0:
-            return None
-
-        target = Target()
-        target.header.stamp = stamp
-        target.header.frame_id = self.camera_frame_
-        target.id = 0
-        target.class_name = "target"
-        target.confidence = 0.9
-        target.depth_confidence = 1.0
-        target.position = [float(x_cam), float(y_cam), float(z_cam)]
-        target.bbox = [float(x_min), float(y_min), float(x_max), float(y_max)]
-        target.center = [float(u), float(v)]
-        target.width = float(bbox_w)
-        target.height = float(bbox_h)
-
-        target_array = TargetArray()
-        target_array.header.stamp = stamp
-        target_array.header.frame_id = self.camera_frame_
-        target_array.targets = [target]
-        target_array.tracking_id = 0
-        return target_array
-
-    def _transform_point(self, transform, x, y, z):
-        rx, ry, rz = self._rotate_vector(transform.transform.rotation, x, y, z)
-        t = transform.transform.translation
-        return rx + t.x, ry + t.y, rz + t.z
-
-    @staticmethod
-    def _rotate_vector(q, x, y, z):
-        qx, qy, qz, qw = q.x, q.y, q.z, q.w
-        norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
-        if norm <= 0.0:
-            return x, y, z
-        qx, qy, qz, qw = qx / norm, qy / norm, qz / norm, qw / norm
-
-        uvx = qy * z - qz * y
-        uvy = qz * x - qx * z
-        uvz = qx * y - qy * x
-        uuvx = qy * uvz - qz * uvy
-        uuvy = qz * uvx - qx * uvz
-        uuvz = qx * uvy - qy * uvx
-
-        return (
-            x + 2.0 * (qw * uvx + uuvx),
-            y + 2.0 * (qw * uvy + uuvy),
-            z + 2.0 * (qw * uvz + uuvz),
-        )
-
-    def _warn_throttled(self, key, message, period_sec=2.0):
-        now = self.get_clock().now().nanoseconds * 1e-9
-        last = self._last_warnings.get(key)
-        if last is None or now - last >= period_sec:
-            self.get_logger().warning(message)
-            self._last_warnings[key] = now
+            target = Target()
+            target.class_name = "target"
+            target.confidence = 0.9
+            target.depth_confidence = 1.0
+            # 位置：相机光心坐标系 (camera_optical_link) 下的 3D 坐标
+            target.position = cam_pos
+            # 填充虚拟的图像特征（供 IBVS 控制器使用）
+            # bbox：640x480 图像中央的 80x80 像素框
+            target.bbox = [280.0, 200.0, 360.0, 280.0]
+            target.center = [320.0, 240.0]
+            target_array = TargetArray()
+            target_array.header = pose.header
+            target_array.header.frame_id = self.camera_frame_
+            target_array.targets = [target]
+            target_array.tracking_id = 0
+            self.target3d_pub.publish(target_array)
 
 
 def main(args=None):
