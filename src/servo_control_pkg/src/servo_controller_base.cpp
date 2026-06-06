@@ -21,6 +21,16 @@
 
 namespace servo_control_pkg {
 
+namespace {
+
+bool bboxLooksNormalized(const vision_servo_msgs::msg::Target& target) {
+  return std::all_of(target.bbox.begin(), target.bbox.end(), [](float value) {
+    return std::isfinite(value) && value >= 0.0f && value <= 1.0f;
+  });
+}
+
+}  // namespace
+
 ServoControllerBase::ServoControllerBase(const std::string& node_name,
                                          const rclcpp::NodeOptions& options)
   : Node(node_name, options),
@@ -97,8 +107,13 @@ bool ServoControllerBase::setGoalFromTarget(
     return false;
   }
 
-  const double bbox_w = target.bbox[2] - target.bbox[0];
-  const double bbox_h = target.bbox[3] - target.bbox[1];
+  const bool normalized_bbox = bboxLooksNormalized(target);
+  const double x_min = normalized_bbox ? target.bbox[0] * width_ : target.bbox[0];
+  const double y_min = normalized_bbox ? target.bbox[1] * height_ : target.bbox[1];
+  const double x_max = normalized_bbox ? target.bbox[2] * width_ : target.bbox[2];
+  const double y_max = normalized_bbox ? target.bbox[3] * height_ : target.bbox[3];
+  const double bbox_w = x_max - x_min;
+  const double bbox_h = y_max - y_min;
   if (!std::isfinite(bbox_w) || !std::isfinite(bbox_h) ||
       bbox_w <= 1.0 || bbox_h <= 1.0) {
     RCLCPP_WARN(get_logger(), "目标 bbox 无效，拒绝设置伺服目标");
@@ -113,20 +128,19 @@ bool ServoControllerBase::setGoalFromTarget(
   const double current_depth = target.position[2];
   if (desired_depth > 0.0 && current_depth > 0.0) {
     const double scale = std::clamp(current_depth / desired_depth, 0.1, 10.0);
-    const double center_x = (target.center[0] > 0.0f)
-      ? target.center[0] : 0.5 * (target.bbox[0] + target.bbox[2]);
-    const double center_y = (target.center[1] > 0.0f)
-      ? target.center[1] : 0.5 * (target.bbox[1] + target.bbox[3]);
     const double desired_w = std::max(1.0, bbox_w * scale);
     const double desired_h = std::max(1.0, bbox_h * scale);
 
+    // IBVS 的期望图像特征直接定义在图像中心：云台负责把目标中心拉回
+    // 主点附近，尺度由 desired_depth 决定。这比“记录当前目标中心”为期望
+    // 更适合跟拍闭环，否则目标偏在画面左/右时也会被视为已达目标。
     desired_target.bbox = {
-      static_cast<float>(center_x - 0.5 * desired_w),
-      static_cast<float>(center_y - 0.5 * desired_h),
-      static_cast<float>(center_x + 0.5 * desired_w),
-      static_cast<float>(center_y + 0.5 * desired_h)
+      static_cast<float>(cx_ - 0.5 * desired_w),
+      static_cast<float>(cy_ - 0.5 * desired_h),
+      static_cast<float>(cx_ + 0.5 * desired_w),
+      static_cast<float>(cy_ + 0.5 * desired_h)
     };
-    desired_target.center = {static_cast<float>(center_x), static_cast<float>(center_y)};
+    desired_target.center = {static_cast<float>(cx_), static_cast<float>(cy_)};
     desired_target.position[2] = static_cast<float>(desired_depth);
   }
 
@@ -158,27 +172,36 @@ Eigen::Matrix<double, 6, 6> ServoControllerBase::computeInteractionMatrix(
   Eigen::Matrix<double, 6, 6> L;
   L.block<2,6>(0,0) = Li(features(0), features(1), depth);  // 点 1: (x_min, y_min)
   L.block<2,6>(2,0) = Li(features(2), features(3), depth);  // 点 2: (x_max, y_max)
-  L.block<2,6>(4,0) = Li(features(4), features(5), depth);  // 点 3: (log(area), aspect)
+  L.block<2,6>(4,0) = Li(features(4), features(5), depth);  // 点 3: (x_max, y_min)
 
   return L;
 }
 
 Eigen::Matrix<double, 6, 1> ServoControllerBase::extractFeatures(
     const vision_servo_msgs::msg::Target& target) {
-  // 特征向量定义（6 维归一化图像特征）：
-  //   s[0-1]：归一化边界框左上角 (x_min, y_min)
-  //   s[2-3]：归一化边界框右下角 (x_max, y_max)
-  //   s[4]：  log(面积 + ε) —— 尺度不变性
-  //   s[5]：  宽高比 —— 形状变化检测
+  // 特征向量定义（6 维 = 3 个点 × 2）：
+  //   s[0-1]：bbox 左上角
+  //   s[2-3]：bbox 右下角
+  //   s[4-5]：bbox 右上角
+  //
+  // 早期版本把 s[4-5] 写成 log(area) 和 aspect_ratio，但交互矩阵
+  // computeInteractionMatrix() 使用的是“点特征”解析式。现在三组特征
+  // 全部是真实图像点，L 的每个 2×6 子块都有明确物理意义。
   Eigen::Matrix<double, 6, 1> f;
-  // 归一化：将像素坐标除以焦距，转换为无量纲归一化图像坐标
-  f(0) = (target.bbox[0] - cx_) / fx_;  // x_min 归一化
-  f(1) = (target.bbox[1] - cy_) / fy_;  // y_min 归一化
-  f(2) = (target.bbox[2] - cx_) / fx_;  // x_max 归一化
-  f(3) = (target.bbox[3] - cy_) / fy_;  // y_max 归一化
-  double area = std::abs((target.bbox[2] - target.bbox[0]) * (target.bbox[3] - target.bbox[1]));
-  f(4) = std::log(area + 1e-6);          // 对数面积（+ε 防止 log(0)）
-  f(5) = (target.bbox[2] - target.bbox[0]) / (target.bbox[3] - target.bbox[1] + 1e-6); // 宽高比
+  const bool normalized_bbox = bboxLooksNormalized(target);
+  const double x_min = normalized_bbox ? target.bbox[0] * width_ : target.bbox[0];
+  const double y_min = normalized_bbox ? target.bbox[1] * height_ : target.bbox[1];
+  const double x_max = normalized_bbox ? target.bbox[2] * width_ : target.bbox[2];
+  const double y_max = normalized_bbox ? target.bbox[3] * height_ : target.bbox[3];
+
+  // 像素坐标通过相机内参归一化为针孔模型坐标：
+  // x = (u - cx) / fx, y = (v - cy) / fy。
+  f(0) = (x_min - cx_) / fx_;
+  f(1) = (y_min - cy_) / fy_;
+  f(2) = (x_max - cx_) / fx_;
+  f(3) = (y_max - cy_) / fy_;
+  f(4) = (x_max - cx_) / fx_;
+  f(5) = (y_min - cy_) / fy_;
   return f;
 }
 

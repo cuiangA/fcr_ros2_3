@@ -29,6 +29,7 @@
   <depend>rclcpp</depend>
   <depend>rclcpp_action</depend>
   <depend>rclcpp_components</depend>
+  <depend>rcl_interfaces</depend>
   <depend>vision_servo_msgs</depend>       <!-- ServoState, PlatformState, TargetArray -->
   <depend>geometry_msgs</depend>           <!-- Twist, Vector3, Pose -->
   <depend>sensor_msgs</depend>             <!-- CameraInfo -->
@@ -36,6 +37,8 @@
   <depend>tf2_geometry_msgs</depend>
   <depend>eigen</depend>                  <!-- 线性代数（交互矩阵、伪逆） -->
   <depend>pluginlib</depend>               <!-- 动态控制器插件加载 -->
+
+  <exec_depend>simulation_pkg</exec_depend> <!-- MVP mock/2D sim launch 运行时节点 -->
 
   <export>
     <build_type>ament_cmake</build_type>

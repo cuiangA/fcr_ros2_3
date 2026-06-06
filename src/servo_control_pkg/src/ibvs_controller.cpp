@@ -20,23 +20,27 @@
 #include "servo_control_pkg/ibvs_controller.hpp"
 #include <Eigen/SVD>
 #include <pluginlib/class_list_macros.hpp>
+#include <algorithm>
+#include <cmath>
 
 namespace servo_control_pkg {
 
 IBVSController::IBVSController(const rclcpp::NodeOptions& options)
   : ServoControllerBase("ibvs_controller", options),
     gain_max_(1.0), gain_min_(0.1),
-    error_threshold_slow_(0.05), use_adaptive_gain_(true)
+    error_threshold_slow_(0.05), svd_damping_(0.01), use_adaptive_gain_(true)
 {
   // ── 声明 IBVS 专属参数 ──────────────────────────────────────────
   this->declare_parameter("gain_max", 1.0);
   this->declare_parameter("gain_min", 0.1);
   this->declare_parameter("error_threshold_slow", 0.05);
+  this->declare_parameter("svd_damping", 0.01);
   this->declare_parameter("use_adaptive_gain", true);
 
   gain_max_ = this->get_parameter("gain_max").as_double();
   gain_min_ = this->get_parameter("gain_min").as_double();
   error_threshold_slow_ = this->get_parameter("error_threshold_slow").as_double();
+  svd_damping_ = this->get_parameter("svd_damping").as_double();
   use_adaptive_gain_ = this->get_parameter("use_adaptive_gain").as_bool();
 }
 
@@ -61,6 +65,7 @@ void IBVSController::configureFromNode(const rclcpp::Node& node) {
   gain_max_ = get_double("gain_max", gain_max_);
   gain_min_ = get_double("gain_min", gain_min_);
   error_threshold_slow_ = get_double("error_threshold_slow", error_threshold_slow_);
+  svd_damping_ = get_double("svd_damping", svd_damping_);
   use_adaptive_gain_ = get_bool("use_adaptive_gain", use_adaptive_gain_);
 }
 
@@ -74,8 +79,22 @@ std::optional<Eigen::Matrix<double, 6, 1>> IBVSController::computeVelocity(
   }
 
   // ── 步骤 1：提取当前特征 ────────────────────────────────────────
+  // extractFeatures() 输出 3 个真实图像点：左上、右下、右上。
+  // 每个点都使用针孔模型归一化坐标，因此后续可以直接套用点特征
+  // IBVS 交互矩阵。
   current_features_ = extractFeatures(target);
+  if (!current_features_.allFinite()) {
+    last_camera_velocity_.setZero();
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "IBVS 特征包含非有限值，输出零速度");
+    return Eigen::Matrix<double, 6, 1>::Zero();
+  }
+
   current_depth_ = target.position[2];  // Z 坐标 = 深度
+  if (!std::isfinite(current_depth_) || current_depth_ <= 0.0) {
+    current_depth_ = goal_.desired_depth > 0.0 ? goal_.desired_depth : 1.0;
+  }
 
   // ── 步骤 2：计算特征误差 ────────────────────────────────────────
   feature_error_ = current_features_ - goal_.desired_features;
@@ -98,7 +117,12 @@ std::optional<Eigen::Matrix<double, 6, 1>> IBVSController::computeVelocity(
   Eigen::Matrix<double, 6, 1> singular_inv;
   const auto singular_values = svd.singularValues();
   for (int i = 0; i < singular_values.size(); ++i) {
-    singular_inv(i) = singular_values(i) > 1e-6 ? 1.0 / singular_values(i) : 0.0;
+    const double sigma = singular_values(i);
+    const double damping = std::max(0.0, svd_damping_);
+    // 阻尼最小二乘伪逆：sigma / (sigma^2 + mu^2)。
+    // 相比硬阈值 1/sigma，它在特征点退化或深度估计噪声较大时更平滑。
+    singular_inv(i) =
+      sigma > 1e-9 ? sigma / (sigma * sigma + damping * damping) : 0.0;
   }
 
   Eigen::Matrix<double, 6, 1> velocity =
@@ -107,6 +131,12 @@ std::optional<Eigen::Matrix<double, 6, 1>> IBVSController::computeVelocity(
 
   // ── 步骤 7：限幅 ────────────────────────────────────────────────
   velocity = clampVelocity(velocity);
+  if (!velocity.allFinite()) {
+    velocity.setZero();
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "IBVS 计算得到非有限速度，已强制清零");
+  }
 
   iteration_count_++;
   last_camera_velocity_ = velocity;

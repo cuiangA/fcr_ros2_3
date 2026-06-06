@@ -5,9 +5,9 @@
  * 核心思想：直接在图像特征空间中定义误差和控制律。
  *
  * 控制律：v_camera = -λ · L⁺ · (s - s*)
- *   其中 s  = 当前图像特征向量（6 维归一化坐标）
- *        s* = 期望特征向量（示教阶段记录）
- *        L⁺  = 交互矩阵（图像雅可比）的伪逆
+ *   其中 s  = 当前图像特征向量（bbox 3 个点的归一化坐标）
+ *        s* = 期望图像特征（默认位于图像中心并满足期望尺度）
+ *        L⁺  = 交互矩阵（图像雅可比）的阻尼伪逆
  *        λ  = 自适应控制增益
  *
  * 自适应增益：
@@ -28,7 +28,7 @@ namespace servo_control_pkg {
 
 class IBVSController : public ServoControllerBase {
 public:
-  IBVSController() : ServoControllerBase("ibvs_controller", rclcpp::NodeOptions()) {}
+  IBVSController() : IBVSController(rclcpp::NodeOptions()) {}
   explicit IBVSController(const rclcpp::NodeOptions& options);
 
   std::optional<Eigen::Matrix<double, 6, 1>> computeVelocity(
@@ -54,6 +54,7 @@ private:
   double gain_max_;              ///< 自适应增益最大值
   double gain_min_;              ///< 自适应增益最小值
   double error_threshold_slow_;  ///< 误差阈值（低于此值降低增益，避免超调）
+  double svd_damping_;           ///< 阻尼伪逆系数，避免交互矩阵接近奇异时指令突变
   bool use_adaptive_gain_;       ///< 是否启用自适应增益
 };
 

@@ -6,6 +6,7 @@ servo_manager:
     gain_max: 1.0                 # 自适应增益最大值
     gain_min: 0.1                 # 自适应增益最小值
     error_threshold_slow: 0.05    # 误差阈值（低于此值时使用较低增益，避免超调）
+    svd_damping: 0.01             # 阻尼伪逆系数，抑制交互矩阵接近奇异时的速度突变
     use_adaptive_gain: true       # 是否启用自适应增益
     max_linear_velocity: 1.0      # 最大线速度 (m/s)
     max_angular_velocity: 2.0     # 最大角速度 (rad/s)

@@ -1,0 +1,418 @@
+#!/usr/bin/env python3
+"""A lightweight 2D closed-loop simulator for the MVP follow controller."""
+
+import math
+
+import rclpy
+from geometry_msgs.msg import Point, TransformStamped, Twist, TwistStamped
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
+from sensor_msgs.msg import JointState
+from tf2_ros import TransformBroadcaster
+from visualization_msgs.msg import Marker
+from vision_servo_msgs.msg import GimbalCmd, PlatformState, Target, TargetArray
+
+
+def clamp(value, lower, upper):
+    return max(lower, min(upper, value))
+
+
+def wrap_pi(angle):
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def yaw_quaternion(yaw):
+    return 0.0, 0.0, math.sin(0.5 * yaw), math.cos(0.5 * yaw)
+
+
+def pitch_quaternion(pitch):
+    return 0.0, math.sin(0.5 * pitch), 0.0, math.cos(0.5 * pitch)
+
+
+class SimpleRobotSim(Node):
+    def __init__(self):
+        super().__init__("simple_robot_sim_node")
+
+        self.declare_parameter("target_topic", "/target/current")
+        self.declare_parameter("platform_state_topic", "/platform/state")
+        self.declare_parameter("cmd_vel_topic", "/cmd_vel")
+        self.declare_parameter("cmd_gimbal_topic", "/cmd_gimbal")
+        self.declare_parameter("use_twist_stamped", True)
+
+        self.declare_parameter("update_rate_hz", 50.0)
+        self.declare_parameter("image_width", 640)
+        self.declare_parameter("image_height", 480)
+        self.declare_parameter("desired_distance", 2.0)
+        self.declare_parameter("horizontal_fov_deg", 70.0)
+
+        self.declare_parameter("initial_robot_x", 0.0)
+        self.declare_parameter("initial_robot_y", 0.0)
+        self.declare_parameter("initial_robot_yaw", 0.0)
+        self.declare_parameter("initial_gimbal_yaw", 0.0)
+        self.declare_parameter("initial_gimbal_pitch", 0.0)
+        self.declare_parameter("target_x", 3.0)
+        self.declare_parameter("target_y", 1.0)
+
+        self.declare_parameter("gimbal_yaw_min", -3.14)
+        self.declare_parameter("gimbal_yaw_max", 3.14)
+        self.declare_parameter("gimbal_pitch_min", -1.57)
+        self.declare_parameter("gimbal_pitch_max", 1.57)
+
+        self.declare_parameter("publish_tf", True)
+        self.declare_parameter("publish_odom", True)
+        self.declare_parameter("publish_joint_states", True)
+        self.declare_parameter("publish_markers", True)
+
+        self.robot_x = float(self.get_parameter("initial_robot_x").value)
+        self.robot_y = float(self.get_parameter("initial_robot_y").value)
+        self.robot_yaw = float(self.get_parameter("initial_robot_yaw").value)
+        self.gimbal_yaw = float(self.get_parameter("initial_gimbal_yaw").value)
+        self.gimbal_pitch = float(self.get_parameter("initial_gimbal_pitch").value)
+
+        self.base_vx = 0.0
+        self.base_wz = 0.0
+        self.gimbal_yaw_rate = 0.0
+        self.gimbal_pitch_rate = 0.0
+        self.path_points = []
+
+        command_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        state_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+
+        target_topic = self.get_parameter("target_topic").value
+        platform_topic = self.get_parameter("platform_state_topic").value
+        cmd_vel_topic = self.get_parameter("cmd_vel_topic").value
+        cmd_gimbal_topic = self.get_parameter("cmd_gimbal_topic").value
+        use_twist_stamped = bool(self.get_parameter("use_twist_stamped").value)
+
+        if use_twist_stamped:
+            self.cmd_vel_sub = self.create_subscription(
+                TwistStamped, cmd_vel_topic, self.cmd_vel_stamped_callback, command_qos
+            )
+        else:
+            self.cmd_vel_sub = self.create_subscription(
+                Twist, cmd_vel_topic, self.cmd_vel_callback, command_qos
+            )
+        self.cmd_gimbal_sub = self.create_subscription(
+            GimbalCmd, cmd_gimbal_topic, self.cmd_gimbal_callback, command_qos
+        )
+
+        self.target_pub = self.create_publisher(TargetArray, target_topic, command_qos)
+        self.platform_pub = self.create_publisher(PlatformState, platform_topic, state_qos)
+        self.odom_pub = self.create_publisher(Odometry, "/odom", command_qos)
+        self.joint_pub = self.create_publisher(JointState, "/joint_states", command_qos)
+        self.marker_pub = self.create_publisher(Marker, "/visualization_marker", command_qos)
+        self.tf_broadcaster = TransformBroadcaster(self)
+
+        self.last_time = self.get_clock().now()
+        update_rate_hz = max(float(self.get_parameter("update_rate_hz").value), 1.0)
+        self.default_dt = 1.0 / update_rate_hz
+        self.timer = self.create_timer(self.default_dt, self.update)
+
+        self.get_logger().info(
+            f"Simple 2D robot sim started: target={target_topic}, platform={platform_topic}, "
+            f"cmd_vel={cmd_vel_topic} ({'TwistStamped' if use_twist_stamped else 'Twist'})"
+        )
+
+    def cmd_vel_stamped_callback(self, msg):
+        self.store_twist(msg.twist)
+
+    def cmd_vel_callback(self, msg):
+        self.store_twist(msg)
+
+    def store_twist(self, twist):
+        self.base_vx = float(twist.linear.x)
+        self.base_wz = float(twist.angular.z)
+
+    def cmd_gimbal_callback(self, msg):
+        self.gimbal_yaw_rate = 0.0 if msg.hold_yaw else float(msg.yaw_rate)
+        self.gimbal_pitch_rate = 0.0 if msg.hold_pitch else float(msg.pitch_rate)
+
+    def update(self):
+        now = self.get_clock().now()
+        dt = (now - self.last_time).nanoseconds * 1e-9
+        if dt <= 0.0 or dt > 0.2:
+            dt = self.default_dt
+        self.last_time = now
+
+        self.integrate(dt)
+        observation = self.compute_observation()
+
+        self.publish_target(now, observation)
+        self.publish_platform_state(now)
+
+        if bool(self.get_parameter("publish_odom").value):
+            self.publish_odom(now)
+        if bool(self.get_parameter("publish_joint_states").value):
+            self.publish_joint_states(now)
+        if bool(self.get_parameter("publish_tf").value):
+            self.publish_tf(now)
+        if bool(self.get_parameter("publish_markers").value):
+            self.publish_markers(now)
+
+    def integrate(self, dt):
+        self.robot_x += self.base_vx * math.cos(self.robot_yaw) * dt
+        self.robot_y += self.base_vx * math.sin(self.robot_yaw) * dt
+        self.robot_yaw = wrap_pi(self.robot_yaw + self.base_wz * dt)
+
+        yaw_min = float(self.get_parameter("gimbal_yaw_min").value)
+        yaw_max = float(self.get_parameter("gimbal_yaw_max").value)
+        pitch_min = float(self.get_parameter("gimbal_pitch_min").value)
+        pitch_max = float(self.get_parameter("gimbal_pitch_max").value)
+        self.gimbal_yaw = clamp(self.gimbal_yaw + self.gimbal_yaw_rate * dt, yaw_min, yaw_max)
+        self.gimbal_pitch = clamp(
+            self.gimbal_pitch + self.gimbal_pitch_rate * dt, pitch_min, pitch_max
+        )
+
+    def compute_observation(self):
+        target_x = float(self.get_parameter("target_x").value)
+        target_y = float(self.get_parameter("target_y").value)
+        image_width = float(self.get_parameter("image_width").value)
+        image_height = float(self.get_parameter("image_height").value)
+        half_fov = math.radians(float(self.get_parameter("horizontal_fov_deg").value)) * 0.5
+
+        dx = target_x - self.robot_x
+        dy = target_y - self.robot_y
+        cos_yaw = math.cos(self.robot_yaw)
+        sin_yaw = math.sin(self.robot_yaw)
+        xb = cos_yaw * dx + sin_yaw * dy
+        yb = -sin_yaw * dx + cos_yaw * dy
+
+        bearing = math.atan2(yb, xb)
+        image_angle = wrap_pi(self.gimbal_yaw - bearing)
+        ex = image_angle / half_fov if half_fov > 1e-6 else 0.0
+        depth = math.hypot(xb, yb)
+        valid = xb > 0.05 and abs(ex) <= 1.0
+
+        cx = 0.5 * image_width + ex * 0.5 * image_width
+        cy = 0.5 * image_height
+
+        return {
+            "valid": valid,
+            "cx": cx,
+            "cy": cy,
+            "ex": ex,
+            "depth": depth,
+            "xb": xb,
+            "yb": yb,
+        }
+
+    def publish_target(self, now, observation):
+        msg = TargetArray()
+        msg.header.stamp = now.to_msg()
+        msg.header.frame_id = "camera_link"
+
+        if not observation["valid"]:
+            msg.tracking_id = -1
+            self.target_pub.publish(msg)
+            return
+
+        image_width = float(self.get_parameter("image_width").value)
+        image_height = float(self.get_parameter("image_height").value)
+        cx = observation["cx"]
+        cy = observation["cy"]
+        depth = observation["depth"]
+
+        bbox_w = 0.125 * image_width
+        bbox_h = 0.25 * image_height
+
+        target = Target()
+        target.header = msg.header
+        target.id = 0
+        target.class_name = "sim_target"
+        target.center = [float(cx), float(cy)]
+        target.bbox = [
+            float(clamp(cx - 0.5 * bbox_w, 0.0, image_width)),
+            float(clamp(cy - 0.5 * bbox_h, 0.0, image_height)),
+            float(clamp(cx + 0.5 * bbox_w, 0.0, image_width)),
+            float(clamp(cy + 0.5 * bbox_h, 0.0, image_height)),
+        ]
+        target.width = float(target.bbox[2] - target.bbox[0])
+        target.height = float(target.bbox[3] - target.bbox[1])
+        target.confidence = 1.0
+        target.position = [float(observation["ex"] * depth), 0.0, float(depth)]
+        target.velocity = [0.0, 0.0, 0.0]
+        target.depth_confidence = 1.0
+
+        msg.targets = [target]
+        msg.tracking_id = target.id
+        self.target_pub.publish(msg)
+
+    def publish_platform_state(self, now):
+        msg = PlatformState()
+        msg.header.stamp = now.to_msg()
+        msg.header.frame_id = "odom"
+        msg.chassis_pose = [float(self.robot_x), float(self.robot_y), float(self.robot_yaw)]
+        msg.chassis_velocity = [float(self.base_vx), 0.0, float(self.base_wz)]
+        msg.battery_voltage = 24.0
+        msg.gimbal_yaw = float(self.gimbal_yaw)
+        msg.gimbal_pitch = float(self.gimbal_pitch)
+        msg.gimbal_yaw_rate = float(self.gimbal_yaw_rate)
+        msg.gimbal_pitch_rate = float(self.gimbal_pitch_rate)
+        msg.angular_velocity = [0.0, 0.0, float(self.base_wz)]
+        msg.linear_acceleration = [0.0, 0.0, 0.0]
+        _, _, qz, qw = yaw_quaternion(self.robot_yaw)
+        msg.orientation.z = qz
+        msg.orientation.w = qw
+        msg.chassis_connected = True
+        msg.gimbal_connected = True
+        msg.imu_connected = False
+        msg.emergency_stop = False
+        msg.system_mode = 3
+        self.platform_pub.publish(msg)
+
+    def publish_odom(self, now):
+        msg = Odometry()
+        msg.header.stamp = now.to_msg()
+        msg.header.frame_id = "odom"
+        msg.child_frame_id = "base_link"
+        msg.pose.pose.position.x = float(self.robot_x)
+        msg.pose.pose.position.y = float(self.robot_y)
+        qx, qy, qz, qw = yaw_quaternion(self.robot_yaw)
+        msg.pose.pose.orientation.x = qx
+        msg.pose.pose.orientation.y = qy
+        msg.pose.pose.orientation.z = qz
+        msg.pose.pose.orientation.w = qw
+        msg.twist.twist.linear.x = float(self.base_vx)
+        msg.twist.twist.angular.z = float(self.base_wz)
+        self.odom_pub.publish(msg)
+
+    def publish_joint_states(self, now):
+        msg = JointState()
+        msg.header.stamp = now.to_msg()
+        msg.name = ["gimbal_yaw_joint", "gimbal_pitch_joint"]
+        msg.position = [float(self.gimbal_yaw), float(self.gimbal_pitch)]
+        msg.velocity = [float(self.gimbal_yaw_rate), float(self.gimbal_pitch_rate)]
+        self.joint_pub.publish(msg)
+
+    def publish_tf(self, now):
+        base_tf = TransformStamped()
+        base_tf.header.stamp = now.to_msg()
+        base_tf.header.frame_id = "odom"
+        base_tf.child_frame_id = "base_link"
+        base_tf.transform.translation.x = float(self.robot_x)
+        base_tf.transform.translation.y = float(self.robot_y)
+        _, _, qz, qw = yaw_quaternion(self.robot_yaw)
+        base_tf.transform.rotation.z = qz
+        base_tf.transform.rotation.w = qw
+
+        yaw_tf = TransformStamped()
+        yaw_tf.header.stamp = now.to_msg()
+        yaw_tf.header.frame_id = "base_link"
+        yaw_tf.child_frame_id = "gimbal_yaw_link"
+        yaw_tf.transform.translation.z = 0.2
+        _, _, qz, qw = yaw_quaternion(self.gimbal_yaw)
+        yaw_tf.transform.rotation.z = qz
+        yaw_tf.transform.rotation.w = qw
+
+        camera_tf = TransformStamped()
+        camera_tf.header.stamp = now.to_msg()
+        camera_tf.header.frame_id = "gimbal_yaw_link"
+        camera_tf.child_frame_id = "camera_link"
+        camera_tf.transform.translation.x = 0.15
+        qx, qy, qz, qw = pitch_quaternion(self.gimbal_pitch)
+        camera_tf.transform.rotation.x = qx
+        camera_tf.transform.rotation.y = qy
+        camera_tf.transform.rotation.z = qz
+        camera_tf.transform.rotation.w = qw
+
+        self.tf_broadcaster.sendTransform([base_tf, yaw_tf, camera_tf])
+
+    def publish_markers(self, now):
+        self.publish_robot_marker(now)
+        self.publish_target_marker(now)
+        self.publish_path_marker(now)
+
+    def publish_robot_marker(self, now):
+        marker = Marker()
+        marker.header.stamp = now.to_msg()
+        marker.header.frame_id = "odom"
+        marker.ns = "mvp_simple_sim"
+        marker.id = 0
+        marker.type = Marker.ARROW
+        marker.action = Marker.ADD
+        marker.pose.position.x = float(self.robot_x)
+        marker.pose.position.y = float(self.robot_y)
+        _, _, qz, qw = yaw_quaternion(self.robot_yaw)
+        marker.pose.orientation.z = qz
+        marker.pose.orientation.w = qw
+        marker.scale.x = 0.55
+        marker.scale.y = 0.22
+        marker.scale.z = 0.22
+        marker.color.r = 0.1
+        marker.color.g = 0.45
+        marker.color.b = 0.95
+        marker.color.a = 0.9
+        self.marker_pub.publish(marker)
+
+    def publish_target_marker(self, now):
+        marker = Marker()
+        marker.header.stamp = now.to_msg()
+        marker.header.frame_id = "odom"
+        marker.ns = "mvp_simple_sim"
+        marker.id = 1
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = float(self.get_parameter("target_x").value)
+        marker.pose.position.y = float(self.get_parameter("target_y").value)
+        marker.pose.position.z = 0.2
+        marker.scale.x = 0.25
+        marker.scale.y = 0.25
+        marker.scale.z = 0.25
+        marker.color.r = 0.95
+        marker.color.g = 0.2
+        marker.color.b = 0.1
+        marker.color.a = 0.95
+        self.marker_pub.publish(marker)
+
+    def publish_path_marker(self, now):
+        point = Point()
+        point.x = float(self.robot_x)
+        point.y = float(self.robot_y)
+        self.path_points.append(point)
+        self.path_points = self.path_points[-300:]
+
+        marker = Marker()
+        marker.header.stamp = now.to_msg()
+        marker.header.frame_id = "odom"
+        marker.ns = "mvp_simple_sim"
+        marker.id = 2
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+        marker.scale.x = 0.035
+        marker.color.r = 0.1
+        marker.color.g = 0.7
+        marker.color.b = 0.35
+        marker.color.a = 0.85
+        marker.points = self.path_points
+        self.marker_pub.publish(marker)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = SimpleRobotSim()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

@@ -540,6 +540,83 @@ ros2 action send_goal /servo/visual_servo vision_servo_msgs/action/VisualServo \
 
 ---
 
+## 11. 第一阶段 MVP 跟拍控制
+
+第一阶段先不接入完整 Gazebo、PBVS、MPC、RL 和复杂 ControlAllocator，主路径只验证：
+
+```text
+mock_target_publisher / simple_robot_sim
+        ↓
+/target/current
+        ↓
+mvp_follow_controller_node
+        ↓
+/cmd_vel
+/cmd_gimbal
+```
+
+MVP 策略：
+
+- 云台默认使用单点 IBVS：以目标中心为图像特征，求角速度交互矩阵阻尼伪逆后输出 `GimbalCmd.yaw_rate/pitch_rate`。
+- 如需回退到简单比例控制，可在参数中设置 `use_ibvs_gimbal: false`。
+- 底盘根据目标深度 `Z` 输出前后速度 `vx`。
+- 底盘角速度 `wz` 只追当前云台 yaw 偏角 `q_yaw`，不直接追图像水平误差，降低画面抖动。
+- 控制输出包含死区、限幅、一阶低通滤波和目标丢失零速度保护。
+
+构建：
+
+```bash
+colcon build --symlink-install
+source install/setup.bash
+```
+
+运行 mock topic 测试：
+
+```bash
+ros2 launch servo_control_pkg mvp_mock_test.launch.py scenario:=left
+ros2 topic echo /cmd_vel
+ros2 topic echo /cmd_gimbal
+```
+
+可选场景：
+
+```text
+center      目标居中，期望 /cmd_vel 和 /cmd_gimbal 接近 0
+left        目标偏左，云台 yaw 有响应，底盘不因 ex 直接大幅转动
+right       目标偏右，云台 yaw 与 left 方向相反
+up/down     测试云台 pitch 方向
+far         目标太远，base_vx > 0
+near        目标太近，base_vx < 0
+lost        目标丢失，底盘和云台发布 0
+sinusoidal  目标左右周期运动，用于观察滤波和平滑性
+```
+
+运行 2D 闭环仿真：
+
+```bash
+ros2 launch servo_control_pkg mvp_2d_sim.launch.py
+```
+
+默认目标在机器人左前方。正常现象是云台先快速转向目标，底盘随后根据云台 yaw 偏角慢慢转向；机器人转过去后，云台 yaw 逐渐回到接近 0，同时距离收敛到 `desired_distance` 附近。需要可视化时：
+
+```bash
+ros2 launch servo_control_pkg mvp_2d_sim.launch.py rviz:=true
+```
+
+第一阶段暂时不接入：
+
+- `ServoManager` 的 pluginlib 多策略主链路
+- 完整 PBVS / HYBRID / MPC / RL 控制
+- 复杂 `ControlAllocator` 和 6D camera velocity 分配
+- 完整 Gazebo 物理仿真
+- YOLO 实时推理和真实深度相机
+- 真实 DJI RS2 云台接口
+- 真实 LeKiwi 底盘接口
+
+后续 V2 稳定版建议按顺序升级：先接真实 `/perception/targets_3d`，再接稳定 `/platform/state`，然后接仿真/真实 driver，最后再恢复 PBVS、MPC、RL 或优化分配器。
+
+---
+
 ## 版本演进
 
 | 版本 | 工作空间 | 特点 |

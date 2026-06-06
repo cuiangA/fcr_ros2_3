@@ -12,8 +12,9 @@
  *   - extractFeatures()：从 Target 消息提取归一化图像特征向量
  *
  * 特征向量定义（6 维）：
- *   s = [x1, y1, x2, y2, log(area), aspect_ratio]
- *   前 4 维为归一化图像坐标（除以 fx/fy），后 2 维描述边界框的尺度和形状。
+ *   s = [x_lt, y_lt, x_rb, y_rb, x_rt, y_rt]
+ *   即目标 bbox 的左上、右下、右上 3 个点，均为归一化图像坐标。
+ *   这样 6 维特征可以严格对应 3 个点特征的 6×6 IBVS 交互矩阵。
  */
 
 #pragma once
@@ -33,7 +34,7 @@ namespace servo_control_pkg {
 
 /// 视觉伺服的期望特征配置
 struct ServoGoal {
-  Eigen::Matrix<double, 6, 1> desired_features;  ///< 期望特征向量（6 维归一化图像特征）
+  Eigen::Matrix<double, 6, 1> desired_features;  ///< 期望特征向量（3 个归一化 bbox 点）
   double desired_depth;                            ///< 期望目标深度 (m)，-1 = 保持当前深度
   double feature_tolerance;                        ///< 收敛阈值（特征误差范数小于此值视为已收敛）
   double max_linear_velocity;                      ///< 最大线速度限制 (m/s)
@@ -80,7 +81,7 @@ public:
 
   /**
    * @brief 设置期望的视觉特征（示教模式：teaching-by-showing）。
-   * @param desired 期望特征向量（6 维归一化图像特征）
+   * @param desired 期望特征向量（3 个归一化 bbox 点）
    * @param depth   期望深度 (m)，-1 表示保持当前深度
    */
   virtual void setDesiredFeatures(const Eigen::Matrix<double, 6, 1>& desired, double depth);
@@ -136,10 +137,12 @@ protected:
    * @brief 从 Target 消息中提取归一化图像特征向量。
    *
    * 特征向量定义：
-   *   s[0-1] = (x_min - cx) / fx, (y_min - cy) / fy  → 归一化左上角
-   *   s[2-3] = (x_max - cx) / fx, (y_max - cy) / fy  → 归一化右下角
-   *   s[4]   = log(area + ε)                           → 对数面积（尺度不变性）
-   *   s[5]   = (w / (h + ε))                            → 宽高比
+   *   s[0-1] = (x_min - cx) / fx, (y_min - cy) / fy  → 左上角
+   *   s[2-3] = (x_max - cx) / fx, (y_max - cy) / fy  → 右下角
+   *   s[4-5] = (x_max - cx) / fx, (y_min - cy) / fy  → 右上角
+   *
+   * 注意：这里不再混入面积或宽高比。IBVS 的点特征交互矩阵要求每两维
+   * 都是一个真实图像点 (x, y)，否则 L 的物理意义会被破坏。
    */
   Eigen::Matrix<double, 6, 1> extractFeatures(const vision_servo_msgs::msg::Target& target);
 

@@ -1,0 +1,45 @@
+mvp_follow_controller_node:
+  ros__parameters:
+    target_topic: /target/current
+    platform_state_topic: /platform/state
+    cmd_vel_topic: /cmd_vel
+    cmd_gimbal_topic: /cmd_gimbal
+    use_twist_stamped: true
+
+    image_width: 640
+    image_height: 480
+    control_rate_hz: 50.0
+
+    desired_distance: 2.0
+
+    K_gimbal_x: 0.8
+    K_gimbal_y: 0.6
+    K_base_z: 0.4
+    K_base_yaw: 0.5
+    use_ibvs_gimbal: true
+    ibvs_gimbal_gain: 0.8
+    ibvs_damping: 0.01
+    camera_fx: 0.0
+    camera_fy: 0.0
+    camera_cx: 0.0
+    camera_cy: 0.0
+
+    ex_deadband: 0.05
+    ey_deadband: 0.05
+    depth_deadband: 0.2
+    q_yaw_deadband: 0.0873
+
+    max_gimbal_yaw_vel: 0.8
+    max_gimbal_pitch_vel: 0.6
+    max_base_vx: 0.4
+    max_base_wz: 0.6
+
+    filter_alpha_error: 0.5
+    filter_alpha_depth: 0.3
+    filter_alpha_cmd: 0.3
+
+    target_timeout: 0.5
+
+    use_mock_gimbal_state: true
+    mock_q_yaw: 0.0
+    mock_q_pitch: 0.0

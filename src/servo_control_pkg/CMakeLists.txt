@@ -31,6 +31,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(vision_servo_msgs REQUIRED)   # TargetArray, ServoState, PlatformState
 find_package(geometry_msgs REQUIRED)        # Twist, Vector3
 find_package(sensor_msgs REQUIRED)          # CameraInfo
@@ -113,6 +114,15 @@ target_link_libraries(servo_manager_node
   servo_qos
 )
 install(TARGETS servo_manager_node DESTINATION lib/${PROJECT_NAME})
+
+# ── 第一阶段 MVP 跟拍控制节点 ────────────────────────────────────
+add_executable(mvp_follow_controller_node src/mvp_follow_controller_node.cpp)
+target_include_directories(mvp_follow_controller_node PRIVATE include)
+ament_target_dependencies(mvp_follow_controller_node
+  rclcpp rcl_interfaces vision_servo_msgs geometry_msgs Eigen3
+)
+target_link_libraries(mvp_follow_controller_node servo_qos)
+install(TARGETS mvp_follow_controller_node DESTINATION lib/${PROJECT_NAME})
 
 # ── 速度指令节点 ──────────────────────────────────────────────────
 add_executable(velocity_commander_node src/velocity_commander_node.cpp)
