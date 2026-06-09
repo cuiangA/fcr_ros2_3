@@ -1,10 +1,19 @@
 # servo_control_pkg/config/pbvs_params.yaml
 # PBVS（基于位置的视觉伺服）控制器参数
+#
+# 控制律（2026-06 修正）：
+#   平动: v_trans = +K_t * (P_target - P_desired)   — 正增益，运动学 dP/dt=-v 决定
+#   转动: ω = +K_r * angle * rotation_axis            — 从光轴对准目标方向的几何计算
+#
+# 调参历史：
+#   translational_gain: 0.5 → 0.7 → 0.6  (修正符号后重新标定)
+#   rotational_gain:    0.3 → 0.8 → 0.6  (修正旋转误差计算后重新标定)
+#   feature_tolerance:  0.02 → 0.05       (移动目标下放宽，避免震荡)
 servo_manager:
   ros__parameters:
-    translational_gain: 0.5       # 平动控制增益
-    rotational_gain: 0.3         # 转动控制增益（通常比平动增益小，因为转动更灵敏）
+    translational_gain: 0.6       # 平动控制增益（正增益，K_t ↑ → 深度收敛快但可能超调）
+    rotational_gain: 0.6          # 转动控制增益（正增益，K_r ↑ → 偏航/俯仰收敛快）
     max_linear_velocity: 1.0     # 最大线速度 (m/s)
     max_angular_velocity: 2.0    # 最大角速度 (rad/s)
-    feature_tolerance: 0.02      # 位姿误差收敛阈值
+    feature_tolerance: 0.05      # 位姿误差收敛阈值
     desired_depth: 2.0           # 期望目标深度 (m)

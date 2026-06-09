@@ -77,7 +77,9 @@ def generate_launch_description():
             PathJoinSubstitution([servo_config, "pbvs_params.yaml"]),
             PathJoinSubstitution([servo_config, "allocator_params.yaml"]),
             {"controller_plugin": "servo_control_pkg::PBVSController",
-             "allocation_ratio": 1.0},
+             "allocation_ratio": 1.0,
+             "auto_start": True,
+             "publish_unstamped_cmd_vel": True},
         ],
     )
 

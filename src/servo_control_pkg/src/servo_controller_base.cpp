@@ -206,21 +206,66 @@ Eigen::Matrix<double, 6, 1> ServoControllerBase::extractFeatures(
 }
 
 vision_servo_msgs::msg::ServoState ServoControllerBase::getServoState() const {
+  /**
+   * 构建并返回当前伺服控制器的完整状态快照。
+   *
+   * 此方法是一个只读查询接口，不修改任何内部状态。它把控制器的内部 Eigen 向量
+   * 打包成 ROS 消息，供 servo_manager_node 周期性发布到 /servo_state 话题，
+   * 用于：上位机监控、调试可视化（rqt_plot / PlotJuggler）、以及下游节点的
+   * 决策（例如 mvp_follow_controller 据此判断伺服是否已收敛，进而切换控制阶段）。
+   *
+   * 返回消息包含以下字段：
+   *   - norm_error / desired_norm_error : 特征误差 L2 范数及收敛阈值
+   *   - feature_error[6]                : 6 维特征误差向量 s - s*（分量级别）
+   *   - camera_velocity[6]              : 最近一次控制律输出的相机 6-DOF 速度
+   *   - condition_number                : 交互矩阵 L 的条件数（SVD 奇异值比）
+   *   - iteration_count                 : 累计控制迭代次数（判断是否刚切换目标）
+   *   - state                           : 状态机当前阶段（IDLE / CONVERGING / TRACKING）
+   *   - last_update                     : 时间戳（本次快照的采样时刻）
+   */
+
   vision_servo_msgs::msg::ServoState state;
-  // 填充当前内部状态
-  state.norm_error = feature_error_.norm();          // 当前特征误差范数
-  state.desired_norm_error = goal_.feature_tolerance; // 收敛阈值
+
+  // ── 标量状态：误差范数、收敛阈值、迭代计数 ────────────────────────
+  // norm_error: 当前帧特征误差的 L2 范数 ||s - s*||，是收敛判断的唯一指标。
+  //   值越大 → 离期望图像特征越远；趋于 0 → 已对齐。
+  state.norm_error = feature_error_.norm();
+  state.desired_norm_error = goal_.feature_tolerance;
   state.iteration_count = iteration_count_;
+
+  // ── 时间戳：记录本次状态快照的采样时刻 ─────────────────────────────
+  // 使用控制器节点自身的时钟（通常为 sim time 或 wall clock），
+  // 与目标检测帧的时间戳不同——这里标记的是"控制端何时产生了此快照"。
   const auto now = this->now();
   const int64_t now_ns = now.nanoseconds();
-  state.last_update.sec = static_cast<int32_t>(now_ns / 1000000000LL);
-  state.last_update.nanosec = static_cast<uint32_t>(now_ns % 1000000000LL);
+  state.last_update.sec = static_cast<int32_t>(now_ns / 1'000'000'000LL);
+  state.last_update.nanosec = static_cast<uint32_t>(now_ns % 1'000'000'000LL);
 
+  // ── 向量状态：6 维特征误差 + 6 维相机速度 ─────────────────────────
+  // 将 Eigen::Matrix<double,6,1> 逐分量转为 float，适配 ROS 消息的
+  // float32[6] 数组。下游可直接用这 12 个标量绘图或做分量级分析。
   for (size_t i = 0; i < 6; ++i) {
     state.feature_error[i] = static_cast<float>(feature_error_(i));
     state.camera_velocity[i] = static_cast<float>(last_camera_velocity_(i));
   }
 
+  // ── 交互矩阵条件数（可观测性 / 数值稳定性指标） ───────────────────
+  // 对当前交互矩阵 L(6×6) 做 SVD 分解，取奇异值绝对值后计算条件数：
+  //   κ(L) = σ_max / σ_min
+  //
+  // 物理含义：
+  //   - κ 接近 1    → L 各向同性好，6 个 DOF 均可观可控，伪逆数值稳定
+  //   - κ >> 1      → L 接近秩亏，某些方向的运动在图像空间中几乎不可见
+  //                    （例如目标过远 → 深度维不可观；或特征点退化 → 退化配置）
+  //   - κ → +∞      → L 奇异，SVD 伪逆依赖阻尼系数 μ 防止速度发散
+  //
+  // 监控此值可以：
+  //   1. 判断当前几何配置是否适合 IBVS（远距离/正前方 = 病态，需切换到 PBVS 或减速）
+  //   2. 评估阻尼系数 svd_damping_ 是否足够（κ 飙升时需加大 μ）
+  //   3. 在 rqt_plot 中与 norm_error 叠加，观察收敛质量与奇异性之间的相关性
+  //
+  // 注意：min_sv ≤ 1e-9 时视为数值奇异，条件数直接设为 +∞ 而非除零。
+  // 实际中 min_sv 一般不会严格为 0（阻尼伪逆保护），但可能接近机器精度。
   Eigen::JacobiSVD<Eigen::Matrix<double, 6, 6>> svd(interaction_matrix_);
   const auto singular_values = svd.singularValues().cwiseAbs();
   const double min_sv = singular_values.minCoeff();
@@ -229,16 +274,42 @@ vision_servo_msgs::msg::ServoState ServoControllerBase::getServoState() const {
     ? static_cast<float>(max_sv / min_sv)
     : std::numeric_limits<float>::infinity();
 
-  // 状态机判定：
-  //   IDLE → CONVERGING → TRACKING（误差在容差内时进入跟踪稳态）
+  // ── 状态机：三阶段判定 ────────────────────────────────────────────
+  //
+  //   ┌──────────┐  标定完成 + 目标已设    ┌─────────────┐
+  //   │   IDLE   │ ─────────────────────→ │ CONVERGING  │
+  //   │ (未就绪) │                        │  (正在收敛)  │
+  //   └──────────┘                        └──────┬───────┘
+  //                                               │
+  //                                    ||e|| < feature_tolerance
+  //                                               │
+  //                                               ▼
+  //                                        ┌─────────────┐
+  //                                        │  TRACKING   │
+  //                                        │ (已收敛跟踪) │
+  //                                        └─────────────┘
+  //
+  // 状态说明：
+  //   IDLE       — 相机内参未标定 (initialized_=false) 或尚未设置伺服目标
+  //                 (goal_configured_=false)。此时 computeVelocity() 返回零速度，
+  //                 servo_manager 应跳过控制发布。
+  //   CONVERGING — 目标已设置且误差超过收敛阈值。控制器正在输出非零速度以
+  //                 驱动相机/云台对齐期望特征。mpv_follow_controller 可在此期间
+  //                 进入"粗跟踪"阶段（仅云台伺服，底盘待命）。
+  //   TRACKING   — 特征误差已降至阈值以下，视为已到达期望图像特征。
+  //                 控制器输出零速度（或微量保持速度），系统进入稳态跟踪。
+  //                 mvp_follow_controller 可据此切换到"精跟"/"底盘协同"模式。
+  //
+  // 注：此处使用 state.norm_error（已计算好的 L2 范数）而非重新计算，
+  // 避免重复的 Eigen norm() 开销。
   if (!initialized_) {
     state.state = vision_servo_msgs::msg::ServoState::IDLE;
   } else if (!goal_configured_) {
     state.state = vision_servo_msgs::msg::ServoState::IDLE;
   } else if (state.norm_error < goal_.feature_tolerance) {
-    state.state = vision_servo_msgs::msg::ServoState::TRACKING;  // 已收敛，维持跟踪
+    state.state = vision_servo_msgs::msg::ServoState::TRACKING;
   } else {
-    state.state = vision_servo_msgs::msg::ServoState::CONVERGING; // 正在收敛
+    state.state = vision_servo_msgs::msg::ServoState::CONVERGING;
   }
   return state;
 }
