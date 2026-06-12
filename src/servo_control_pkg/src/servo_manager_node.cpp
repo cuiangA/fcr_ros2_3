@@ -23,8 +23,8 @@
  *     目标数据               控制器                分配器              执行器
  *   ┌──────────┐   ┌──────────────────┐   ┌──────────────┐   ┌──────────────┐
  *   │ Target   │──→│ computeVelocity()│──→│ allocate()   │──→│ /cmd_vel     │
- *   │ (bbox,   │   │ v = -λ·L⁺·(s-s*) │   │ 相机速度 →   │   │ /cmd_gimbal  │
- *   │  pos[3]) │   │ 6-DOF 相机速度   │   │ 底盘+云台指令│   │ /servo/state │
+ *   │ (bbox,   │   │ v = -λ·L⁺·(s-s*) │   │ 相机速度 →   │    │ /cmd_gimbal   │
+ *   │  pos[3]) │   │ 6-DOF 相机速度    │   │ 底盘+云台指令│    │ /servo/state  │
  *   └──────────┘   └──────────────────┘   └──────────────┘   └──────────────┘
  *
  *   步骤详解：
@@ -107,7 +107,7 @@ namespace servo_control_pkg {
 class ServoManagerNode : public rclcpp::Node {
 public:
   using VisualServo = vision_servo_msgs::action::VisualServo;
-  using GoalHandleVisualServo = rclcpp_action::ServerGoalHandle<VisualServo>;
+  using GoalHandleVisualServo = rclcpp_action::ServerGoalHandle<VisualServo>;//它是服务端手里握着的某个具体 action 请求的句柄
 
   explicit ServoManagerNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions())
     : Node("servo_manager", options)
