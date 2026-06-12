@@ -14,6 +14,9 @@ def generate_launch_description():
     use_twist_stamped = LaunchConfiguration("use_twist_stamped")
     target_x = LaunchConfiguration("target_x")
     target_y = LaunchConfiguration("target_y")
+    target_motion = LaunchConfiguration("target_motion")
+    target_speed = LaunchConfiguration("target_speed")
+    target_radius = LaunchConfiguration("target_radius")
     rviz = LaunchConfiguration("rviz")
 
     controller_config = PathJoinSubstitution([
@@ -38,6 +41,9 @@ def generate_launch_description():
             "desired_distance": 2.0,
             "target_x": ParameterValue(target_x, value_type=float),
             "target_y": ParameterValue(target_y, value_type=float),
+            "target_motion": target_motion,
+            "target_speed": ParameterValue(target_speed, value_type=float),
+            "target_radius": ParameterValue(target_radius, value_type=float),
         }],
     )
 
@@ -84,7 +90,22 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "target_y",
             default_value="1.0",
-            description="Target y position in odom frame; positive starts to robot left.",
+            description="Target center y position in odom frame; positive starts to robot left.",
+        ),
+        DeclareLaunchArgument(
+            "target_motion",
+            default_value="circle",
+            description="Target motion pattern: static, circle, line, or figure8.",
+        ),
+        DeclareLaunchArgument(
+            "target_speed",
+            default_value="0.2",
+            description="Target motion phase speed in rad/s.",
+        ),
+        DeclareLaunchArgument(
+            "target_radius",
+            default_value="1.0",
+            description="Target motion radius/amplitude in meters.",
         ),
         DeclareLaunchArgument(
             "rviz",

@@ -58,6 +58,9 @@ class SimpleRobotSim(Node):
         self.declare_parameter("initial_gimbal_pitch", 0.0)
         self.declare_parameter("target_x", 3.0)
         self.declare_parameter("target_y", 1.0)
+        self.declare_parameter("target_motion", "circle")
+        self.declare_parameter("target_speed", 0.2)
+        self.declare_parameter("target_radius", 1.0)
 
         self.declare_parameter("gimbal_yaw_min", -3.14)
         self.declare_parameter("gimbal_yaw_max", 3.14)
@@ -80,6 +83,8 @@ class SimpleRobotSim(Node):
         self.gimbal_yaw_rate = 0.0
         self.gimbal_pitch_rate = 0.0
         self.path_points = []
+        self.target_path_points = []
+        self.reported_unknown_target_motion = False
 
         command_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -119,6 +124,7 @@ class SimpleRobotSim(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
 
         self.last_time = self.get_clock().now()
+        self.start_time = self.last_time
         update_rate_hz = max(float(self.get_parameter("update_rate_hz").value), 1.0)
         self.default_dt = 1.0 / update_rate_hz
         self.timer = self.create_timer(self.default_dt, self.update)
@@ -150,7 +156,7 @@ class SimpleRobotSim(Node):
         self.last_time = now
 
         self.integrate(dt)
-        observation = self.compute_observation()
+        observation = self.compute_observation(now)
 
         self.publish_target(now, observation)
         self.publish_platform_state(now)
@@ -178,9 +184,34 @@ class SimpleRobotSim(Node):
             self.gimbal_pitch + self.gimbal_pitch_rate * dt, pitch_min, pitch_max
         )
 
-    def compute_observation(self):
-        target_x = float(self.get_parameter("target_x").value)
-        target_y = float(self.get_parameter("target_y").value)
+    def current_target_position(self, now):
+        center_x = float(self.get_parameter("target_x").value)
+        center_y = float(self.get_parameter("target_y").value)
+        motion = str(self.get_parameter("target_motion").value).lower()
+        speed = max(float(self.get_parameter("target_speed").value), 0.0)
+        radius = max(float(self.get_parameter("target_radius").value), 0.0)
+        elapsed = (now - self.start_time).nanoseconds * 1e-9
+        phase = speed * elapsed
+
+        if motion == "static" or radius <= 1e-6 or speed <= 1e-6:
+            return center_x, center_y
+        if motion == "line":
+            return center_x + radius * math.sin(phase), center_y
+        if motion == "figure8":
+            return (
+                center_x + radius * math.sin(phase),
+                center_y + 0.5 * radius * math.sin(2.0 * phase),
+            )
+        if motion != "circle" and not self.reported_unknown_target_motion:
+            self.get_logger().warn(
+                f"Unknown target_motion '{motion}', falling back to circle."
+            )
+            self.reported_unknown_target_motion = True
+
+        return center_x + radius * math.cos(phase), center_y + radius * math.sin(phase)
+
+    def compute_observation(self, now):
+        target_x, target_y = self.current_target_position(now)
         image_width = float(self.get_parameter("image_width").value)
         image_height = float(self.get_parameter("image_height").value)
         half_fov = math.radians(float(self.get_parameter("horizontal_fov_deg").value)) * 0.5
@@ -209,6 +240,8 @@ class SimpleRobotSim(Node):
             "depth": depth,
             "xb": xb,
             "yb": yb,
+            "target_x": target_x,
+            "target_y": target_y,
         }
 
     def publish_target(self, now, observation):
@@ -360,6 +393,8 @@ class SimpleRobotSim(Node):
         self.marker_pub.publish(marker)
 
     def publish_target_marker(self, now):
+        target_x, target_y = self.current_target_position(now)
+
         marker = Marker()
         marker.header.stamp = now.to_msg()
         marker.header.frame_id = "odom"
@@ -367,8 +402,8 @@ class SimpleRobotSim(Node):
         marker.id = 1
         marker.type = Marker.SPHERE
         marker.action = Marker.ADD
-        marker.pose.position.x = float(self.get_parameter("target_x").value)
-        marker.pose.position.y = float(self.get_parameter("target_y").value)
+        marker.pose.position.x = float(target_x)
+        marker.pose.position.y = float(target_y)
         marker.pose.position.z = 0.2
         marker.scale.x = 0.25
         marker.scale.y = 0.25
@@ -400,6 +435,29 @@ class SimpleRobotSim(Node):
         marker.color.a = 0.85
         marker.points = self.path_points
         self.marker_pub.publish(marker)
+
+        target_x, target_y = self.current_target_position(now)
+        target_point = Point()
+        target_point.x = float(target_x)
+        target_point.y = float(target_y)
+        target_point.z = 0.2
+        self.target_path_points.append(target_point)
+        self.target_path_points = self.target_path_points[-300:]
+
+        target_marker = Marker()
+        target_marker.header.stamp = now.to_msg()
+        target_marker.header.frame_id = "odom"
+        target_marker.ns = "mvp_simple_sim"
+        target_marker.id = 3
+        target_marker.type = Marker.LINE_STRIP
+        target_marker.action = Marker.ADD
+        target_marker.scale.x = 0.025
+        target_marker.color.r = 0.95
+        target_marker.color.g = 0.45
+        target_marker.color.b = 0.05
+        target_marker.color.a = 0.8
+        target_marker.points = self.target_path_points
+        self.marker_pub.publish(target_marker)
 
 
 def main(args=None):
