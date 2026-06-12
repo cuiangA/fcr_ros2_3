@@ -369,6 +369,8 @@ class SimpleRobotSim(Node):
         self.publish_robot_marker(now)
         self.publish_target_marker(now)
         self.publish_path_marker(now)
+        self.publish_camera_sight_marker(now)
+        self.publish_desired_distance_marker(now)
 
     def publish_robot_marker(self, now):
         marker = Marker()
@@ -383,9 +385,9 @@ class SimpleRobotSim(Node):
         _, _, qz, qw = yaw_quaternion(self.robot_yaw)
         marker.pose.orientation.z = qz
         marker.pose.orientation.w = qw
-        marker.scale.x = 0.55
-        marker.scale.y = 0.22
-        marker.scale.z = 0.22
+        marker.scale.x = 0.35
+        marker.scale.y = 0.14
+        marker.scale.z = 0.14
         marker.color.r = 0.1
         marker.color.g = 0.45
         marker.color.b = 0.95
@@ -458,6 +460,71 @@ class SimpleRobotSim(Node):
         target_marker.color.a = 0.8
         target_marker.points = self.target_path_points
         self.marker_pub.publish(target_marker)
+
+    def camera_position(self):
+        camera_yaw = self.robot_yaw + self.gimbal_yaw
+        return (
+            self.robot_x + 0.15 * math.cos(camera_yaw),
+            self.robot_y + 0.15 * math.sin(camera_yaw),
+        )
+
+    def publish_camera_sight_marker(self, now):
+        target_x, target_y = self.current_target_position(now)
+        camera_x, camera_y = self.camera_position()
+
+        marker = Marker()
+        marker.header.stamp = now.to_msg()
+        marker.header.frame_id = "odom"
+        marker.ns = "mvp_simple_sim"
+        marker.id = 4
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+        marker.scale.x = 0.02
+        marker.color.r = 0.0
+        marker.color.g = 0.85
+        marker.color.b = 1.0
+        marker.color.a = 0.9
+
+        camera_point = Point()
+        camera_point.x = float(camera_x)
+        camera_point.y = float(camera_y)
+        camera_point.z = 0.2
+        target_point = Point()
+        target_point.x = float(target_x)
+        target_point.y = float(target_y)
+        target_point.z = 0.2
+        marker.points = [camera_point, target_point]
+        self.marker_pub.publish(marker)
+
+    def publish_desired_distance_marker(self, now):
+        target_x, target_y = self.current_target_position(now)
+        radius = max(float(self.get_parameter("desired_distance").value), 0.0)
+        if radius <= 1e-6:
+            return
+
+        marker = Marker()
+        marker.header.stamp = now.to_msg()
+        marker.header.frame_id = "odom"
+        marker.ns = "mvp_simple_sim"
+        marker.id = 5
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+        marker.scale.x = 0.015
+        marker.color.r = 0.55
+        marker.color.g = 0.55
+        marker.color.b = 0.55
+        marker.color.a = 0.55
+
+        points = []
+        for idx in range(65):
+            angle = 2.0 * math.pi * idx / 64.0
+            point = Point()
+            point.x = float(target_x + radius * math.cos(angle))
+            point.y = float(target_y + radius * math.sin(angle))
+            point.z = 0.02
+            points.append(point)
+        marker.points = points
+        self.marker_pub.publish(marker)
 
 
 def main(args=None):
