@@ -1,627 +1,280 @@
 # FCR ROS2 Visual Servoing Workspace (fcr_ros2_3)
 
-基于 ROS2 Humble 的工业级视觉伺服移动机器人项目框架。
-LEKIWI 全向底盘 + 云台 + YOLO 目标检测 + IBVS/PBVS 视觉伺服跟踪。
+基于 ROS2 Humble 的智能跟拍机器人项目。LEKIWI 三轮全向底盘 + DJI RS2 云台相机 + YOLO 目标检测 + IBVS/PBVS 视觉伺服。
 
 ---
 
-## 1. 完整目录树
+## 项目当前阶段
+
+按照[四阶段渐进路线](https://github.com/cuiangA/fcr_ros2_3)（V1 MVP → V2 稳定化 → V3 混合视觉伺服 → V4 MPC优化），**当前处于 V2.5**：
+
+```
+V1  MVP          ████████████████████░  90%  控制闭环完整, YOLO 推理待填充
+V2  稳定化       █████████████████░░░░  85%  滤波/死区/限幅/目标管理齐全
+V3  混合视觉伺服  ██████████████░░░░░░░  70%  IBVS/PBVS/Allocator/热切换已实现
+V4  MPC/优化      █░░░░░░░░░░░░░░░░░░░░   5%  仅头文件骨架
+```
+
+| 阶段 | 控制方案 | 状态 |
+|------|---------|------|
+| V1 | 图像误差控制 + 距离控制 + 云台偏角补偿 | ✅ 基本完成（YOLO 推理为占位） |
+| V2 | V1 + 滤波 + 死区 + 限幅 + 目标锁定 | ✅ 大部分完成 |
+| V3 | 云台 IBVS + 底盘 PBVS + 控制分配 | ✅ 算法完成，架构待拆分 |
+| V4 | QP / MPC 协同控制 | ❌ 未开始 |
+
+---
+
+## 1. 包结构
 
 ```
 fcr_ros2_3/
-├── README.md                          # 本文档
-├── build.sh                           # 一键构建脚本
-├── .gitignore
-├── .vscode/
-│   └── settings.json
-└── src/
-    ├── vision_servo_msgs/             # ★ 消息/服务/动作 独立定义包
-    │   ├── CMakeLists.txt
-    │   ├── package.xml
-    │   ├── msg/
-    │   │   ├── Target.msg             # 目标检测/跟踪结果（2D+3D）
-    │   │   ├── TargetArray.msg        # 多目标数组
-    │   │   ├── ServoState.msg         # 视觉伺服状态（误差、雅可比、收敛）
-    │   │   ├── PlatformState.msg      # 统一平台状态（底盘+云台+IMU）
-    │   │   └── GimbalCmd.msg          # 云台速度指令
-    │   ├── srv/
-    │   │   ├── SetTrackingTarget.srv   # 设置跟踪目标
-    │   │   ├── SetServoMode.srv        # 运行时切换伺服模式
-    │   │   └── CalibrateCamera.srv     # 触发相机标定
-    │   └── action/
-    │       └── VisualServo.action      # 长时间伺服任务（反馈+取消）
-    │
-    ├── perception_pkg/                # ★ 视觉节点统一包
-    │   ├── CMakeLists.txt
-    │   ├── package.xml
-    │   ├── include/perception_pkg/
-    │   │   ├── detection_node.hpp      # YOLO 检测节点
-    │   │   ├── tracking_node.hpp       # SORT/ByteTrack 多目标跟踪
-    │   │   ├── depth_estimator.hpp     # 深度估计（RGBD/双目）
-    │   │   ├── perception_pipeline.hpp # 可组合流水线（intra-process）
-    │   │   └── qos.hpp
-    │   ├── src/
-    │   │   ├── detection_node.cpp
-    │   │   ├── tracking_node.cpp
-    │   │   ├── depth_estimator_node.cpp
-    │   │   └── perception_pipeline.cpp
-    │   ├── config/
-    │   │   ├── detection_params.yaml
-    │   │   ├── tracking_params.yaml
-    │   │   └── depth_params.yaml
-    │   └── launch/
-    │       └── perception.launch.py
-    │
-    ├── servo_control_pkg/             # ★ 视觉伺服+控制算法统一包
-    │   ├── CMakeLists.txt
-    │   ├── package.xml
-    │   ├── plugins.xml                 # pluginlib 控制器注册
-    │   ├── include/servo_control_pkg/
-    │   │   ├── servo_controller_base.hpp # ★ 抽象基类（所有控制器继承）
-    │   │   ├── ibvs_controller.hpp       # IBVS 图像雅可比控制器
-    │   │   ├── pbvs_controller.hpp       # PBVS 位姿误差控制器
-    │   │   ├── mpc_controller.hpp        # MPC 模型预测控制（论文扩展）
-    │   │   ├── rl_controller.hpp         # RL 强化学习控制（论文扩展）
-    │   │   ├── control_allocator.hpp     # 控制分配：相机速度→底盘+云台
-    │   │   └── qos.hpp
-    │   ├── src/
-    │   │   ├── servo_controller_base.cpp
-    │   │   ├── ibvs_controller.cpp
-    │   │   ├── pbvs_controller.cpp
-    │   │   ├── control_allocator.cpp
-    │   │   ├── servo_manager_node.cpp    # 主控节点：加载插件、启停伺服
-    │   │   └── velocity_commander_node.cpp
-    │   ├── config/
-    │   │   ├── ibvs_params.yaml
-    │   │   ├── pbvs_params.yaml
-    │   │   └── allocator_params.yaml
-    │   └── launch/
-    │       └── servo_control.launch.py
-    │
-    ├── robot_platform_pkg/            # ★ 硬件接口统一包
-    │   ├── CMakeLists.txt
-    │   ├── package.xml
-    │   ├── include/robot_platform_pkg/
-    │   │   ├── hardware_interfaces/
-    │   │   │   ├── chassis_interface.hpp    # ★ 抽象底盘接口
-    │   │   │   ├── gimbal_interface.hpp     # ★ 抽象云台接口
-    │   │   │   ├── imu_interface.hpp        # ★ 抽象IMU接口
-    │   │   │   └── odometry_interface.hpp   # ★ 抽象里程计接口
-    │   │   ├── kinematics/
-    │   │   │   └── three_wheel_omni_kinematics.hpp  # LEKIWI 三轮全向
-    │   │   └── utils/
-    │   │       ├── serial_utils.hpp
-    │   │       ├── can_utils.hpp            # DJI RS2 CAN协议
-    │   │       └── math_utils.hpp
-    │   ├── src/
-    │   │   ├── chassis_driver_node.cpp
-    │   │   ├── gimbal_driver_node.cpp
-    │   │   ├── imu_driver_node.cpp
-    │   │   ├── odometry_node.cpp
-    │   │   └── platform_manager_node.cpp    # 统一平台状态聚合
-    │   ├── config/
-    │   │   ├── chassis_params.yaml
-    │   │   ├── gimbal_params.yaml
-    │   │   ├── imu_params.yaml
-    │   │   └── odometry_params.yaml
-    │   └── launch/
-    │       └── platform.launch.py
-    │
-    ├── bringup_pkg/                   # ★ 一键启动包
-    │   ├── CMakeLists.txt
-    │   ├── package.xml
-    │   ├── config/
-    │   │   └── global_params.yaml
-    │   ├── launch/
-    │   │   ├── fcr_bringup.launch.py      # 生产模式一键启动
-    │   │   ├── fcr_sim_bringup.launch.py  # 仿真模式一键启动
-    │   │   └── fcr_debug.launch.py        # 调试模式（逐个节点、verbose log）
-    │   └── rviz/
-    │       └── fcr_system.rviz
-    │
-    └── simulation_pkg/                # ★ 仿真包
-        ├── CMakeLists.txt
-        ├── package.xml
-        ├── urdf/
-        │   ├── lekiwi_base.xacro          # 底盘（三轮全向+IMU）
-        │   ├── lekiwi_gimbal.xacro        # 云台（yaw+pitch+相机光学帧）
-        │   ├── lekiwi_sensors.xacro       # 深度相机+IMU Gazebo插件
-        │   └── lekiwi_full.urdf.xacro     # 完整机器人（组合上述模块）
-        ├── worlds/
-        │   └── fcr_world.world            # Gazebo仿真世界（含目标物）
-        ├── config/
-        │   └── gazebo_params.yaml
-        ├── launch/
-        │   ├── gazebo.launch.py           # 启动Gazebo+spawn机器人
-        │   ├── spawn_robot.launch.py      # 仅URDF发布+robot_state_publisher
-        │   └── rviz.launch.py             # RViz2可视化
-        └── scripts/
-            ├── target_simulator.py        # 运动目标生成器
-            └── camera_simulator.py        # 虚拟相机（测试模式）
+├── build.sh
+├── src/
+│   ├── vision_servo_msgs/       # 接口定义包（5 msg, 3 srv, 1 action）
+│   ├── perception_pkg/          # 感知管线（检测→跟踪→深度估计）
+│   ├── servo_control_pkg/       # 伺服控制（IBVS/PBVS/MPC/RL + MVP跟拍）
+│   ├── robot_platform_pkg/      # 硬件平台（底盘/云台/IMU/里程计）
+│   ├── simulation_pkg/          # 仿真（Gazebo URDF + Python脚本）
+│   └── bringup_pkg/             # 一键启动（launch/config/rviz）
 ```
 
 ---
 
-## 2. 包依赖关系图
+## 2. 数据流
 
 ```
-                    ┌──────────────────┐
-                    │ vision_servo_msgs │  ← 消息/服务/动作 独立定义
-                    └───────┬──────────┘
-                            │ 被所有功能包依赖
-          ┌─────────┬───────┼───────┬──────────┐
-          ▼         ▼       ▼       ▼          ▼
-  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────┐
-  │perception│ │  servo   │ │  robot   │ │simulation │
-  │   _pkg   │ │ _control │ │_platform │ │   _pkg    │
-  │          │ │   _pkg   │ │   _pkg   │ │(URDF/Gaz) │
-  └────┬─────┘ └────┬─────┘ └────┬─────┘ └─────┬─────┘
-       │             │            │              │
-       │  视觉结果    │  控制指令   │  状态反馈     │  URDF
-       │  ────────▶  │  ────────▶ │              │
-       │             │            │              │
-       └─────────────┴────────────┴──────────────┘
-                            │
-                            ▼
-                    ┌──────────────┐
-                    │  bringup_pkg │  ← 聚合所有包，分层启动
-                    └──────────────┘
-
-依赖关系 (package.xml depend/exec_depend):
-
-bringup_pkg ──exec──▶ perception_pkg, servo_control_pkg, robot_platform_pkg, simulation_pkg
-perception_pkg ──depend──▶ vision_servo_msgs (+ cv_bridge, image_transport, OpenCV)
-servo_control_pkg ──depend──▶ vision_servo_msgs (+ pluginlib, Eigen3)
-robot_platform_pkg ──depend──▶ vision_servo_msgs (+ tf2_ros, nav_msgs, Eigen3)
-simulation_pkg ──exec──▶ gazebo_ros_pkgs, xacro, robot_state_publisher
-所有功能包 ──depend──▶ rclcpp, rclcpp_components
+/camera/image_raw  ──→  DetectionNode(YOLO)  ──→  /perception/detections
+                         [⚠ 推理占位，仿真用 mock]         │
+                                                          ▼
+                                                   TrackingNode(SORT)
+                                                   /perception/tracks
+                                                          │
+                                                          ▼
+                                                   DepthEstimatorNode
+                                                   /perception/targets_3d
+                                                          │
+/platform/state  ←──  PlatformManagerNode  ←──  ServoManagerNode
+                                                         │
+                                              ┌──────────┼──────────┐
+                                              ▼                     ▼
+                                         /cmd_vel              /cmd_gimbal
+                                      (TwistStamped)          (GimbalCmd)
+                                              │                     │
+                                              ▼                     ▼
+                                        ChassisDriver         GimbalDriver
 ```
 
----
-
-## 3. Topic / Message / Service / Action 设计
-
-### 3.1 Topic 流图
+### 轻量替代路径（MVP 跟拍）
 
 ```
-┌─────────────┐    /camera/image_raw        ┌──────────────────┐
-│  相机驱动    │ ──────────────────────────▶  │  Detection Node  │
-│ (RealSense/ │    (sensor_msgs/Image)      │  (YOLO TensorRT)  │
-│  OAK-D)     │                             └────────┬─────────┘
-└─────────────┘                                      │
-                                              /perception/detections
-                                              (TargetArray)
-                                                     │
-                                                     ▼
-                     ┌──────────────────────────────────────┐
-                     │           Tracking Node               │
-                     │       (SORT / ByteTrack)              │
-                     └────────────┬─────────────────────────┘
-                                  │
-                    /perception/tracks (TargetArray, with persistent IDs)
-                                  │
-                                  ▼
-                     ┌──────────────────────────────────────┐
-                     │        Depth Estimator Node           │
-                     │    (depth image → 3D coordinates)     │
-                     └────────────┬─────────────────────────┘
-                                  │
-                    /perception/targets_3d (TargetArray, with 3D position)
-                                  │
-                                  ▼
-  ┌────────────────┐    ┌──────────────────────────────┐
-  │ Platform Mgr   │    │      Servo Manager Node       │
-  │ /platform/state│◀───│  (pluginlib → IBVS/PBVS/MPC)  │
-  │ (PlatformState)│    └──────────┬───────────────────┘
-  └────────────────┘               │
-                     ┌─────────────┴─────────────┐
-                     │                           │
-               /cmd_vel                   /cmd_gimbal
-          (TwistStamped)                 (GimbalCmd)
-                     │                           │
-                     ▼                           ▼
-          ┌──────────────┐           ┌──────────────┐
-          │Chassis Driver│           │Gimbal Driver │
-          │  /odom       │           │ /gimbal/state│
-          └──────────────┘           └──────────────┘
-
-监控/调试 Topics:
-  /servo/state        (ServoState)    – 伺服状态、误差、雅可比条件数
-  /target/marker      (Marker)        – RViz 3D目标标记
-  /perception/detections_markers (MarkerArray) – 检测框可视化
-```
-
-### 3.2 Message 定义
-
-| Message | 用途 | 关键字段 |
-|---------|------|---------|
-| `Target` | 单目标检测/跟踪结果 | id, class_name, bbox[4], center[2], confidence, position[3], velocity[3], depth_confidence |
-| `TargetArray` | 多目标数组 | Header, Target[] targets, int32 tracking_id |
-| `ServoState` | 伺服状态 | state (IDLE/CONVERGING/TRACKING/LOST/ERROR), feature_error[6], norm_error, condition_number, camera_velocity[6], gimbal_velocity[2], chassis_velocity[3] |
-| `PlatformState` | 平台聚合状态 | chassis_pose[3], chassis_velocity[3], gimbal_yaw/pitch/yaw_rate/pitch_rate, angular_velocity[3], orientation, emergency_stop, system_mode |
-| `GimbalCmd` | 云台速度指令 | yaw_rate, pitch_rate, hold_yaw, hold_pitch |
-
-### 3.3 Service 定义
-
-| Service | 用途 | Request | Response |
-|---------|------|---------|----------|
-| `SetTrackingTarget` | 选择跟踪目标 | target_id, class_name, enable | success, message, assigned_id |
-| `SetServoMode` | 运行时切换伺服模式 | mode (IBVS=0, PBVS=1, HYBRID=2, MPC=3, RL=4) | success, message |
-| `CalibrateCamera` | 触发标定 | calibration_type, target_pattern | success, message, calibration_file |
-
-### 3.4 Action 定义
-
-| Action | 用途 | Goal | Feedback | Result |
-|--------|------|------|----------|--------|
-| `VisualServo` | 长时间伺服任务 | target_id, class_name, desired_depth, feature_tolerance, timeout | progress, current_error, camera_velocity[6], servo_state | success, message, final_error, elapsed_time |
-
----
-
-## 4. MultiThreadedExecutor 线程划分方案
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   MultiThreadedExecutor                      │
-│                    (线程数 = CPU核心数)                        │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌─────────────────────┐  ┌─────────────────────┐           │
-│  │  Callback Group 1   │  │  Callback Group 2   │           │
-│  │  "Sensor I/O"        │  │  "Perception"       │           │
-│  │  (2 线程)            │  │  (2-4 线程)          │           │
-│  │                      │  │                      │           │
-│  │  • Camera driver     │  │  • YOLO 推理 (GPU)  │           │
-│  │  • IMU driver (1kHz)│  │  • 目标跟踪          │           │
-│  │  • 图像订阅回调       │  │  • 深度估计          │           │
-│  │                      │  │  • 流水线组合节点     │           │
-│  └─────────────────────┘  └─────────────────────┘           │
-│                                                              │
-│  ┌─────────────────────┐  ┌─────────────────────┐           │
-│  │  Callback Group 3   │  │  Callback Group 4   │           │
-│  │  "Servo Control"    │  │  "Hardware I/O"      │           │
-│  │  (1 线程, 高优先级)  │  │  (2 线程)            │           │
-│  │                      │  │                      │           │
-│  │  • 50Hz 控制循环     │  │  • 底盘驱动 (串口)   │           │
-│  │  • IBVS 雅可比计算   │  │  • 云台驱动 (CAN)    │           │
-│  │  • 控制分配          │  │  • 里程计发布 (50Hz) │           │
-│  │  • Servo Action Svr │  │  • TF 广播           │           │
-│  └─────────────────────┘  └─────────────────────┘           │
-│                                                              │
-│  ┌─────────────────────┐                                     │
-│  │  Callback Group 5   │                                     │
-│  │  "Monitoring"       │                                     │
-│  │  (1 线程)            │                                     │
-│  │                      │                                     │
-│  │  • /servo/state pub │                                     │
-│  │  • /platform/state  │                                     │
-│  │  • Service servers  │                                     │
-│  │  • 参数回调          │                                     │
-│  └─────────────────────┘                                     │
-└─────────────────────────────────────────────────────────────┘
-
-实现方式 (rclcpp):
-  auto executor = rclcpp::executors::MultiThreadedExecutor(
-    rclcpp::ExecutorOptions(), /*num_threads=*/8);
-  
-  // 将节点分配到不同的 Callback Group
-  sensor_node->set_callback_group(sensor_group);     // Group 1
-  perception_node->set_callback_group(perception_group); // Group 2
-  servo_node->set_callback_group(control_group);      // Group 3
-  driver_node->set_callback_group(hardware_group);    // Group 4
-```
-
----
-
-## 5. QoS 设计
-
-| 数据类型 | Reliability | History | Depth | Durability | 理由 |
-|---------|-------------|---------|-------|------------|------|
-| 原始图像 `/camera/image_raw` | BEST_EFFORT | KEEP_LAST | 1 | VOLATILE | 容忍丢帧，始终取最新帧 |
-| 深度图像 `/camera/depth/image_raw` | BEST_EFFORT | KEEP_LAST | 1 | VOLATILE | 同上 |
-| 相机内参 `/camera/camera_info` | RELIABLE | KEEP_LAST | 1 | TRANSIENT_LOCAL | 静态数据，late joiner 需要 |
-| 检测结果 `/perception/detections` | RELIABLE | KEEP_LAST | 5 | VOLATILE | 每帧都需要，小缓冲区 |
-| 跟踪结果 `/perception/tracks` | RELIABLE | KEEP_LAST | 5 | VOLATILE | 同上 |
-| 3D目标 `/perception/targets_3d` | RELIABLE | KEEP_LAST | 5 | VOLATILE | 控制输入，延迟敏感 |
-| 底盘速度指令 `/cmd_vel` | RELIABLE | KEEP_LAST | 10 | VOLATILE | 必须可靠送达，低延迟 |
-| 云台速度指令 `/cmd_gimbal` | RELIABLE | KEEP_LAST | 10 | VOLATILE | 同上 |
-| IMU数据 `/imu/data` | BEST_EFFORT | KEEP_LAST | 5 | VOLATILE | 高频数据(100Hz)，容忍偶尔丢包 |
-| 里程计 `/odom` | RELIABLE | KEEP_LAST | 10 | VOLATILE | 定位关键数据 |
-| 平台状态 `/platform/state` | RELIABLE | KEEP_LAST | 10 | TRANSIENT_LOCAL | late joiner 获取当前状态 |
-| 伺服状态 `/servo/state` | RELIABLE | KEEP_LAST | 5 | VOLATILE | 监控/调试用 |
-| TF (`/tf`, `/tf_static`) | RELIABLE | KEEP_LAST | 100 | TRANSIENT_LOCAL(/tf_static) | ROS2 默认 |
-
----
-
-## 6. 实机与仿真共用代码组织
-
-```
-实机与仿真共用策略（Factory Pattern + Launch Argument）：
-
-┌─────────────────────────────────────────────────────┐
-│                 Launch Argument                       │
-│             use_sim := true / false                   │
-└─────────────┬───────────────────┬───────────────────┘
-              │                   │
-      use_sim=true          use_sim=false
-              │                   │
-              ▼                   ▼
-┌─────────────────┐   ┌─────────────────┐
-│ SimulatedDriver  │   │  RealDriver     │
-│ (内存模拟实现)    │   │  (硬件串口/CAN)  │
-└────────┬────────┘   └────────┬────────┘
-         │                     │
-         └──────────┬──────────┘
-                    │
-                    ▼
-         ┌───────────────────┐
-         │ IChassisInterface │ ◀── 共用抽象接口
-         │ IGimbalInterface  │      (定义在 robot_platform_pkg)
-         │ IIMUInterface     │
-         │ IOdometryInterface│
-         └───────────────────┘
-                    │
-                    ▼
-         ┌───────────────────┐
-         │   上层算法节点      │
-         │  (完全相同，无感知)  │
-         │                    │
-         │  • perception_pkg │
-         │  • servo_control  │
-         └───────────────────┘
-
-具体实现：
-  robot_platform_pkg/include/hardware_interfaces/
-    chassis_interface.hpp   ← 纯虚接口
-      ├── 实机: lekiwi_chassis_driver.cpp   (串口→电机指令)
-      └── 仿真: simulated_chassis_driver.cpp (内存→Gazebo插件)
-
-启动方式：
-  # 实机
-  ros2 launch bringup_pkg fcr_bringup.launch.py use_sim:=false
-
-  # 仿真
-  ros2 launch bringup_pkg fcr_sim_bringup.launch.py use_sim:=true
-```
-
----
-
-## 7. 可扩展架构（毕业设计 + 论文扩展）
-
-```
-可扩展控制器架构（pluginlib + 抽象基类）：
-
-        ServoControllerBase (抽象基类)
-        ┌─────────────────────────────┐
-        │ + initialize(fx,fy,cx,cy)   │  ← 相机参数初始化
-        │ + setDesiredFeatures(s*,d)  │  ← 设置期望特征
-        │ + computeVelocity(Target,dt)│  ← ★ 核心接口（纯虚）
-        │   → camera_velocity[6]      │
-        │ + getServoState()           │  ← 状态查询
-        │ + getControllerType()       │  ← 类型标识
-        └──────────────┬──────────────┘
-                       │
-       ┌───────┬───────┼───────┬───────┐
-       ▼       ▼       ▼       ▼       ▼
-   ┌──────┐┌──────┐┌──────┐┌──────┐┌──────┐
-   │ IBVS ││ PBVS ││Hybrid││ MPC  ││  RL  │
-   │      ││      ││(2.5D)││      ││      │
-   └──────┘└──────┘└──────┘└──────┘└──────┘
-   已实现   已实现   占位    占位    占位
-
-运行时切换：
-  ros2 service call /servo/set_mode vision_servo_msgs/srv/SetServoMode "{mode: 1}"
-  # 0=IBVS, 1=PBVS, 2=HYBRID, 3=MPC, 4=RL
-
-添加新控制器的步骤（适用于论文扩展）：
-  1. 继承 ServoControllerBase
-  2. 实现 computeVelocity() 方法
-  3. 在 plugins.xml 注册新类
-  4. 在 CMakeLists.txt 添加编译目标
-  5. 更新 SetServoMode 的 plugin_map 映射表
-```
-
----
-
-## 8. Launch 架构图
-
-```
-                        fcr_sim_bringup.launch.py
-                        (一键仿真启动入口)
-                               │
-          ┌────────────────────┼────────────────────┐
-          ▼                    ▼                    ▼
-   gazebo.launch.py     rviz.launch.py     fcr_bringup.launch.py
-   (Gazebo + spawn)     (RViz2可视化)      (use_sim:=true)
-                                                    │
-                         fcr_bringup.launch.py      │
-                         (一键实机启动入口)           │
-                                │                   │
-          ┌─────────────────────┼───────────────────┘
-          ▼                     ▼
-   platform.launch.py   perception.launch.py   servo_control.launch.py
-   ┌──────┬──────┬──────┐   ┌──────┬──────┐   ┌──────────┬──────────┐
-   │chass │gimbal│ imu  │   │detect│ track│   │  servo   │velocity  │
-   │driver│driver│driver│   │ node │ node │   │ manager  │commander │
-   └──────┴──────┴──────┘   └──────┴──────┘   └──────────┴──────────┘
-        │                              │              │
-   odometry_node              depth_estimator   /cmd_vel → chassis
-        │                              │         /cmd_gimbal → gimbal
-   platform_manager                    │
-        │                              │
-        └──────────┬───────────────────┘
-                   ▼
-            /platform/state      /perception/targets_3d
-                   │                      │
-                   └──────────┬───────────┘
-                              ▼
-                       servo_manager
-                     (IBVS/PBVS/MPC/RL)
-
-调试模式（独立节点，verbose日志）：
-  fcr_debug.launch.py → 七个节点逐个启动，--log-level debug
-```
-
----
-
-## 9. Node Graph（运行时节点图）
-
-```
-┌────────────┐   ┌──────────┐   ┌───────────┐
-│camera_sim  │   │target_sim│   │ imu_driver│
-│(sim only)  │   │(sim only)│   │           │
-└─────┬──────┘   └─────┬────┘   └─────┬─────┘
-      │image_raw       │/target/pose   │/imu/data
-      ▼                │               ▼
-┌──────────┐           │        ┌───────────┐
-│detection │           │        │odometry   │
-│  node    │           │        │  node     │
-└────┬─────┘           │        └─────┬─────┘
-     │/detections      │              │/odom
-     ▼                 │              ▼
-┌──────────┐           │        ┌───────────┐
-│tracking  │           │        │platform   │
-│  node    │           │        │ manager   │
-└────┬─────┘           │        └─────┬─────┘
-     │/tracks          │              │/platform/state
-     ▼                 │              │
-┌────────────┐         │              │
-│depth_estim │         │              │
-│   node     │         │              │
-└─────┬──────┘         │              │
-      │/targets_3d     │              │
-      └────────┬───────┘              │
-               ▼                      ▼
-        ┌────────────────────────────────┐
-        │       servo_manager            │
-        │  (pluginlib → IBVS/PBVS/MPC)  │
-        └──────────┬─────────────────────┘
-                   │
-         ┌─────────┴─────────┐
-         ▼                   ▼
-   ┌──────────┐       ┌──────────┐
-   │ chassis  │       │ gimbal   │
-   │ driver   │       │ driver   │
-   └──────────┘       └──────────┘
-
-━━━ 仿真专用节点 (-- use_sim:=true)
-─── 实机/仿真共用节点
-```
-
----
-
-## 10. 快速开始
-
-```bash
-# 1. 安装依赖
-sudo apt install ros-humble-desktop ros-humble-gazebo-ros-pkgs
-rosdep update
-rosdep install --from-paths src --ignore-src -y
-
-# 2. 构建
-./build.sh
-
-# 3. 启动（实机）
-source install/setup.bash
-ros2 launch bringup_pkg fcr_bringup.launch.py use_sim:=false
-
-# 4. 启动（仿真）
-ros2 launch bringup_pkg fcr_sim_bringup.launch.py
-
-# 5. 调试模式
-ros2 launch bringup_pkg fcr_debug.launch.py debug_level:=debug
-
-# 6. 切换伺服模式
-ros2 service call /servo/set_mode vision_servo_msgs/srv/SetServoMode "{mode: 1}"
-
-# 7. 发送伺服目标
-ros2 action send_goal /servo/visual_servo vision_servo_msgs/action/VisualServo \
-  "{target_id: -1, desired_depth: 2.0, feature_tolerance: 0.01}"
-```
-
----
-
-## 11. 第一阶段 MVP 跟拍控制
-
-第一阶段先不接入完整 Gazebo、PBVS、MPC、RL 和复杂 ControlAllocator，主路径只验证：
-
-```text
 mock_target_publisher / simple_robot_sim
         ↓
 /target/current
         ↓
-mvp_follow_controller_node
+mvp_follow_controller_node    ← 自包含，不依赖 pluginlib / ControlAllocator
         ↓
-/cmd_vel
-/cmd_gimbal
+/cmd_vel + /cmd_gimbal
 ```
 
-MVP 策略：
+---
 
-- 云台默认使用单点 IBVS：以目标中心为图像特征，求角速度交互矩阵阻尼伪逆后输出 `GimbalCmd.yaw_rate/pitch_rate`。
-- 如需回退到简单比例控制，可在参数中设置 `use_ibvs_gimbal: false`。
-- 底盘根据目标深度 `Z` 输出前后速度 `vx`。
-- 底盘角速度 `wz` 只追当前云台 yaw 偏角 `q_yaw`，不直接追图像水平误差，降低画面抖动。
-- 控制输出包含死区、限幅、一阶低通滤波和目标丢失零速度保护。
+## 3. 各模块实现状态
 
-构建：
+### 3.1 perception_pkg — 感知管线
+
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| YOLO 检测 (DetectionNode) | ⚠️ 占位 | `infer()` 为空；架构完整，支持 ONNX/TensorRT/OpenCV DNN 三种推理路径 |
+| 多目标跟踪 (MultiObjectTracker) | ✅ 完成 | 8 状态 Kalman [x,y,w,h,vx,vy,vw,vh] + IoU 匈牙利贪心匹配 |
+| 深度估计 (DepthEstimatorNode) | ✅ 完成 | 双缓存异步融合：深度图采样（优先）→ bbox 面积推算（回退） |
+| 组合流水线 (PerceptionPipeline) | ✅ 完成 | ComposableNode，detection→tracking→depth 三阶段零拷贝 |
+
+**跟踪器核心逻辑** ([multi_object_tracker.cpp](src/perception_pkg/src/multi_object_tracker.cpp))：
+
+```
+每帧：predict() → associate(IoU 贪心) → Kalman correct() → 创建新轨迹 / 删除超龄轨迹
+仅输出 total_visible_count ≥ min_hits(3) 的已确认轨迹，防止假阳性
+```
+
+**深度估计两级回退** ([depth_estimator_node.cpp](src/perception_pkg/src/depth_estimator_node.cpp))：
+
+```
+方法1（置信度 0.8）：bbox 中心点深度图采样 → Z = depth / 1000
+方法2（置信度 0.5）：depth = sqrt((fx·fy·real_w·real_h) / area_px)  → 无需深度图
+反投影：X = (u-cx)/fx·Z, Y = (v-cy)/fy·Z
+```
+
+### 3.2 servo_control_pkg — 伺服控制
+
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| IBVS 控制器 | ✅ 完成 | 6x6 交互矩阵，SVD 阻尼伪逆，自适应增益 |
+| PBVS 控制器 | ✅ 完成 | 平移 + 旋转解耦（光轴叉积） |
+| ControlAllocator | ✅ 完成 | 优先级分配：云台优先旋转，底盘负责平移+剩余旋转 |
+| ServoManagerNode | ✅ 完成 | 50Hz 控制循环，pluginlib 加载，VisualServo Action，SetServoMode 服务 |
+| MvpFollowControllerNode | ✅ 完成 | 三通道解耦 P 控制 + 单点 IBVS 模式，两级滤波，死区 |
+| MPC 控制器 | ❌ 占位 | 仅有头文件，QP 求解器接口预留 |
+| RL 控制器 | ❌ 占位 | 仅有头文件，ONNX 推理接口预留 |
+
+**MVP 跟拍控制架构** ([mvp_follow_controller_node.cpp](src/servo_control_pkg/src/mvp_follow_controller_node.cpp))：
+
+```
+内环（云台，高带宽）：ex,ey → P 或 2x3 角速度 IBVS → gimbal_yaw/pitch
+外环（底盘，低带宽）：ez = Z - Z_desired → base_vx
+                      q_yaw（云台偏角）→ base_wz   ← 串级：底盘不直接追 ex
+信号链：raw → LP(α=0.5) → deadband → P gain → LP(α=0.3) → clamp → output
+```
+
+**控制律**：
+
+```
+gimbal_yaw   = -Kx · e_x          (e_x = (cx - W/2) / (W/2))
+gimbal_pitch = -Ky · e_y
+base_vx      =  Kz · e_z          (e_z = Z - Z_desired)
+base_wz      =  Kb · q_yaw        (追云台偏角，不追图像误差)
+```
+
+### 3.3 robot_platform_pkg — 硬件平台
+
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| 三轮全向运动学 | ✅ 完成 | 120° 对称布局，正/逆运动学矩阵预计算 |
+| 底盘驱动 (LEKIWI) | ⚠️ 仿真完成 | 真实串口通信为 TODO |
+| 云台驱动 (DJI RS2) | ⚠️ 仿真完成 | 真实 CAN 总线通信为 TODO |
+| IMU 驱动 (BNO055) | ⚠️ 仿真完成 | 真实 I2C 通信为 TODO |
+| 里程计 | ✅ 完成 | 轮式里程计 + IMU 融合 |
+| PlatformManager | ✅ 完成 | 聚合底盘/云台/IMU 状态为 PlatformState |
+
+全部使用 Factory Pattern：`use_sim` 参数切换真实/模拟实现，上层算法节点不感知硬件模式。
+
+### 3.4 simulation_pkg — 仿真
+
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| URDF/XACRO 机器人模型 | ✅ 完成 | 底盘 + 云台 + 深度相机 + IMU，模块化组合 |
+| Gazebo 世界 | ✅ 完成 | 含目标物 |
+| target_simulator.py | ✅ 完成 | 圆形/8字形/直线轨迹，支持 TF 变换链 |
+| mock_target_publisher.py | ✅ 完成 | 合成 TargetArray（center/left/right/up/down/far/near/lost/sinusoidal） |
+| simple_robot_sim_node.py | ✅ 完成 | 轻量 2D 闭环仿真（不依赖 Gazebo），用于 MVP 测试 |
+| camera_simulator.py | ✅ 完成 | 发布 camera_info（TRANSIENT_LOCAL QoS） |
+
+---
+
+## 4. 接口定义
+
+### Messages（5个）
+
+| Message | 关键字段 |
+|---------|---------|
+| `Target` | id, class_name, bbox[4], center[2], confidence, position[3], velocity[3], depth_confidence |
+| `TargetArray` | Header, Target[] targets, int32 tracking_id |
+| `ServoState` | state (IDLE/CONVERGING/TRACKING/LOST/ERROR), feature_error[6], condition_number, camera_velocity[6], gimbal_velocity[2], chassis_velocity[3] |
+| `PlatformState` | chassis_pose[3], chassis_velocity[3], gimbal_yaw/pitch/yaw_rate/pitch_rate, angular_velocity[3], emergency_stop, system_mode |
+| `GimbalCmd` | yaw_rate, pitch_rate, hold_yaw, hold_pitch |
+
+### Services（3个）
+
+| Service | 用途 |
+|---------|------|
+| `SetTrackingTarget` | 按 ID 或类别选择跟踪目标 |
+| `SetServoMode` | 运行时热切换 IBVS(0)/PBVS(1)/HYBRID(2)/MPC(3)/RL(4) |
+| `CalibrateCamera` | 触发相机标定 |
+
+### Actions（1个）
+
+| Action | 用途 |
+|--------|------|
+| `VisualServo` | 长时间伺服任务，含目标设定、误差容限、超时、实时反馈和取消 |
+
+---
+
+## 5. QoS 策略
+
+| 数据类型 | Reliability | History | Depth | Durability |
+|---------|-------------|---------|-------|------------|
+| 图像 `/camera/image_raw` | BEST_EFFORT | KEEP_LAST | 1 | VOLATILE |
+| 深度图 `/camera/depth/image_raw` | BEST_EFFORT | KEEP_LAST | 1 | VOLATILE |
+| 相机内参 `/camera/camera_info` | RELIABLE | KEEP_LAST | 1 | TRANSIENT_LOCAL |
+| 检测/跟踪/3D目标 | RELIABLE | KEEP_LAST | 5 | VOLATILE |
+| 控制指令 `/cmd_vel`, `/cmd_gimbal` | RELIABLE | KEEP_LAST | 10 | VOLATILE |
+| IMU `/imu/data` | BEST_EFFORT | KEEP_LAST | 5 | VOLATILE |
+| 平台状态 `/platform/state` | RELIABLE | KEEP_LAST | 10 | TRANSIENT_LOCAL |
+| 伺服状态 `/servo/state` | RELIABLE | KEEP_LAST | 5 | VOLATILE |
+
+---
+
+## 6. 可扩展控制器架构
+
+```
+ServoControllerBase (抽象基类)
+├── IBVSController    ✅   v = -λ · L⁺ · (s - s*)
+├── PBVSController    ✅   v_trans = +Kt·(P-P*), ω 来自光轴叉积
+├── Hybrid(2.5D)      ⚠️   映射到 IBVSController
+├── MPCController     ❌   有限时域 QP 优化（论文扩展）
+└── RLController      ❌   12维观测→6维动作（论文扩展）
+```
+
+运行时切换：
 
 ```bash
-colcon build --symlink-install
+ros2 service call /servo/set_mode vision_servo_msgs/srv/SetServoMode "{mode: 1}"
+# 0=IBVS, 1=PBVS, 2=HYBRID, 3=MPC, 4=RL
+```
+
+添加新控制器只需继承基类 → 实现 `computeVelocity()` → 注册到 `plugins.xml`。
+
+---
+
+## 7. 快速开始
+
+```bash
+# 构建
+./build.sh
 source install/setup.bash
-```
 
-运行 mock topic 测试：
-
-```bash
+# MVP mock 测试（不依赖 Gazebo）
 ros2 launch servo_control_pkg mvp_mock_test.launch.py scenario:=left
+
+# MVP 2D 闭环仿真
+ros2 launch servo_control_pkg mvp_2d_sim.launch.py rviz:=true
+
+# 完整仿真（Gazebo + 全部节点）
+ros2 launch bringup_pkg fcr_sim_bringup.launch.py
+
+# 切换伺服模式
+ros2 service call /servo/set_mode vision_servo_msgs/srv/SetServoMode "{mode: 1}"
+
+# 查看控制输出
 ros2 topic echo /cmd_vel
 ros2 topic echo /cmd_gimbal
 ```
 
-可选场景：
+---
 
-```text
-center      目标居中，期望 /cmd_vel 和 /cmd_gimbal 接近 0
-left        目标偏左，云台 yaw 有响应，底盘不因 ex 直接大幅转动
-right       目标偏右，云台 yaw 与 left 方向相反
-up/down     测试云台 pitch 方向
-far         目标太远，base_vx > 0
-near        目标太近，base_vx < 0
-lost        目标丢失，底盘和云台发布 0
-sinusoidal  目标左右周期运动，用于观察滤波和平滑性
-```
+## 8. 待实现
 
-运行 2D 闭环仿真：
+### 高优先级
 
-```bash
-ros2 launch servo_control_pkg mvp_2d_sim.launch.py
-```
+- **YOLO 模型加载和推理** — `detection_node.cpp` 的 `load_model()` 和 `infer()` 当前为空，需接入 ONNX Runtime 或 TensorRT 实现真实目标检测
 
-默认目标在机器人左前方。正常现象是云台先快速转向目标，底盘随后根据云台 yaw 偏角慢慢转向；机器人转过去后，云台 yaw 逐渐回到接近 0，同时距离收敛到 `desired_distance` 附近。需要可视化时：
+### 中优先级
 
-```bash
-ros2 launch servo_control_pkg mvp_2d_sim.launch.py rviz:=true
-```
+- **真实硬件驱动** — LEKIWI 底盘串口、DJI RS2 云台 CAN 总线、BNO055 IMU I2C 通信均为 TODO
+- **架构拆分** — 按 V3 规划将 TF 变换、IBVS/PBVS 控制器拆分为独立节点
+- **`velocity_commander_node` 完善** — 当前仅处理 Twist linear 分量，角速度读取为 TODO
 
-第一阶段暂时不接入：
+### 低优先级（论文扩展方向）
 
-- `ServoManager` 的 pluginlib 多策略主链路
-- 完整 PBVS / HYBRID / MPC / RL 控制
-- 复杂 `ControlAllocator` 和 6D camera velocity 分配
-- 完整 Gazebo 物理仿真
-- YOLO 实时推理和真实深度相机
-- 真实 DJI RS2 云台接口
-- 真实 LeKiwi 底盘接口
-
-后续 V2 稳定版建议按顺序升级：先接真实 `/perception/targets_3d`，再接稳定 `/platform/state`，然后接仿真/真实 driver，最后再恢复 PBVS、MPC、RL 或优化分配器。
+- **MPC 控制器** — 有限时域优化，QP 求解器（OSQP/qpOASES）
+- **RL 控制器** — 12 维观测 → 6 维连续动作，ONNX/TorchScript 推理
+- **QP 优化型控制分配** — 统一代价函数 + 约束优化
 
 ---
 
-## 版本演进
+## 9. 关键设计决策
 
-| 版本 | 工作空间 | 特点 |
-|------|---------|------|
-| v1 | fcr_ros2 | HSV颜色检测 + PID控制 + 抽象驱动 |
-| v2 | fcr_ros2_1 | YOLO+ByteTrack + P控制 + DJI RS2 CAN |
-| v3 | fcr_ros2_2 | PD+FF控制 + 仿真闭环 + Foxglove |
-| **v4** | **fcr_ros2_3** | **工业级架构 + pluginlib可扩展控制器 + Gazebo仿真 + Action/Service + 论文扩展支持** |
+1. **底盘不直接追图像水平误差** — 底盘 `wz` 追云台 yaw 偏角，形成串级结构。云台快速修正短时偏移，底盘慢速消除长期偏角，避免画面抖动。
+2. **双缓存异步融合** — 深度图和检测结果频率不匹配时，任意一路到达即触发融合，避免时间同步延迟。
+3. **插件化控制器** — pluginlib + 抽象基类，运行时热切换，方便论文扩展。
+4. **Factory Pattern 实/仿共用** — 硬件接口层通过 `use_sim` 参数切换，上层算法代码完全不变。
+5. **ComposableNode 零拷贝** — 感知三阶段同进程顺序调用，消除序列化开销。
