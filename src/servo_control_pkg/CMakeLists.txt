@@ -35,6 +35,7 @@ find_package(rcl_interfaces REQUIRED)
 find_package(vision_servo_msgs REQUIRED)   # TargetArray, ServoState, PlatformState
 find_package(geometry_msgs REQUIRED)        # Twist, Vector3
 find_package(sensor_msgs REQUIRED)          # CameraInfo
+find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)               # 矩阵/线性代数（交互矩阵、伪逆）
@@ -132,6 +133,39 @@ ament_target_dependencies(velocity_commander_node
 )
 target_link_libraries(velocity_commander_node servo_qos)
 install(TARGETS velocity_commander_node DESTINATION lib/${PROJECT_NAME})
+
+# ── V4 实验性运镜链路：真实目标 + 虚拟拍摄位姿 ─────────────────────
+add_executable(shot_reference_generator_node src/shot_reference_generator_node.cpp)
+target_include_directories(shot_reference_generator_node PRIVATE include)
+ament_target_dependencies(shot_reference_generator_node
+  rclcpp rclcpp_action vision_servo_msgs geometry_msgs tf2 tf2_geometry_msgs
+)
+target_link_libraries(shot_reference_generator_node servo_qos)
+install(TARGETS shot_reference_generator_node DESTINATION lib/${PROJECT_NAME})
+
+add_executable(base_pose_controller_node src/base_pose_controller_node.cpp)
+target_include_directories(base_pose_controller_node PRIVATE include)
+ament_target_dependencies(base_pose_controller_node
+  rclcpp vision_servo_msgs geometry_msgs tf2 tf2_geometry_msgs
+)
+target_link_libraries(base_pose_controller_node servo_qos)
+install(TARGETS base_pose_controller_node DESTINATION lib/${PROJECT_NAME})
+
+add_executable(gimbal_target_controller_node src/gimbal_target_controller_node.cpp)
+target_include_directories(gimbal_target_controller_node PRIVATE include)
+ament_target_dependencies(gimbal_target_controller_node
+  rclcpp vision_servo_msgs
+)
+target_link_libraries(gimbal_target_controller_node servo_qos)
+install(TARGETS gimbal_target_controller_node DESTINATION lib/${PROJECT_NAME})
+
+add_executable(command_safety_filter_node src/command_safety_filter_node.cpp)
+target_include_directories(command_safety_filter_node PRIVATE include)
+ament_target_dependencies(command_safety_filter_node
+  rclcpp vision_servo_msgs geometry_msgs
+)
+target_link_libraries(command_safety_filter_node servo_qos)
+install(TARGETS command_safety_filter_node DESTINATION lib/${PROJECT_NAME})
 
 # ── Plugin XML（pluginlib 发现的必要文件） ─────────────────────────
 install(FILES plugins.xml DESTINATION share/${PROJECT_NAME})

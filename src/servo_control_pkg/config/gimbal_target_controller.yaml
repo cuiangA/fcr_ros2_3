@@ -1,0 +1,17 @@
+gimbal_target_controller_node:
+  ros__parameters:
+    target_topic: /target/current
+    reference_topic: /shot/reference
+    output_topic: /control/cmd_gimbal_raw
+    update_rate_hz: 50.0
+    image_width: 640.0
+    image_height: 480.0
+    kp_yaw: 1.2
+    kp_pitch: 0.9
+    max_yaw_rate: 1.5
+    max_pitch_rate: 1.0
+    error_deadband: 0.015
+    filter_alpha: 0.35
+    target_stale_timeout: 0.35
+    reference_stale_timeout: 0.5
+    hold_on_lost: true

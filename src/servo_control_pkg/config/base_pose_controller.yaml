@@ -1,0 +1,19 @@
+base_pose_controller_node:
+  ros__parameters:
+    reference_topic: /shot/reference
+    platform_state_topic: /platform/state
+    output_topic: /control/cmd_vel_raw
+    base_frame: base_link
+    update_rate_hz: 50.0
+    kp_x: 0.9
+    kp_y: 0.9
+    kp_yaw: 1.4
+    max_vx: 0.8
+    max_vy: 0.5
+    max_wz: 1.2
+    max_accel: 1.2
+    max_yaw_accel: 2.0
+    position_deadband: 0.03
+    yaw_deadband: 0.02
+    holonomic: true
+    stale_timeout_sec: 0.4

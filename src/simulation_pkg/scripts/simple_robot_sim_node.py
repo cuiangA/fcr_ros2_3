@@ -15,8 +15,14 @@ from rclpy.qos import (
 )
 from sensor_msgs.msg import JointState
 from tf2_ros import TransformBroadcaster
-from visualization_msgs.msg import Marker
-from vision_servo_msgs.msg import GimbalCmd, PlatformState, Target, TargetArray
+from visualization_msgs.msg import Marker, MarkerArray
+from vision_servo_msgs.msg import (
+    GimbalCmd,
+    PlatformState,
+    ShotReference,
+    Target,
+    TargetArray,
+)
 
 
 def clamp(value, lower, upper):
@@ -35,6 +41,21 @@ def pitch_quaternion(pitch):
     return 0.0, math.sin(0.5 * pitch), 0.0, math.cos(0.5 * pitch)
 
 
+def rpy_quaternion(roll, pitch, yaw):
+    cr = math.cos(0.5 * roll)
+    sr = math.sin(0.5 * roll)
+    cp = math.cos(0.5 * pitch)
+    sp = math.sin(0.5 * pitch)
+    cy = math.cos(0.5 * yaw)
+    sy = math.sin(0.5 * yaw)
+    return (
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    )
+
+
 class SimpleRobotSim(Node):
     def __init__(self):
         super().__init__("simple_robot_sim_node")
@@ -43,6 +64,7 @@ class SimpleRobotSim(Node):
         self.declare_parameter("platform_state_topic", "/platform/state")
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
         self.declare_parameter("cmd_gimbal_topic", "/cmd_gimbal")
+        self.declare_parameter("shot_reference_topic", "/shot/reference")
         self.declare_parameter("use_twist_stamped", True)
 
         self.declare_parameter("update_rate_hz", 50.0)
@@ -61,6 +83,8 @@ class SimpleRobotSim(Node):
         self.declare_parameter("target_motion", "circle")
         self.declare_parameter("target_speed", 0.2)
         self.declare_parameter("target_radius", 1.0)
+        self.declare_parameter("target_line_heading_deg", 0.0)
+        self.declare_parameter("target_line_loop_distance", 0.0)
 
         self.declare_parameter("gimbal_yaw_min", -3.14)
         self.declare_parameter("gimbal_yaw_max", 3.14)
@@ -71,6 +95,8 @@ class SimpleRobotSim(Node):
         self.declare_parameter("publish_odom", True)
         self.declare_parameter("publish_joint_states", True)
         self.declare_parameter("publish_markers", True)
+        self.declare_parameter("marker_topic", "/visualization_marker")
+        self.declare_parameter("marker_array_topic", "/visualization_marker_array")
 
         self.robot_x = float(self.get_parameter("initial_robot_x").value)
         self.robot_y = float(self.get_parameter("initial_robot_y").value)
@@ -84,6 +110,8 @@ class SimpleRobotSim(Node):
         self.gimbal_pitch_rate = 0.0
         self.path_points = []
         self.target_path_points = []
+        self.current_marker_array = None
+        self.latest_shot_reference = None
         self.reported_unknown_target_motion = False
 
         command_qos = QoSProfile(
@@ -102,6 +130,7 @@ class SimpleRobotSim(Node):
         platform_topic = self.get_parameter("platform_state_topic").value
         cmd_vel_topic = self.get_parameter("cmd_vel_topic").value
         cmd_gimbal_topic = self.get_parameter("cmd_gimbal_topic").value
+        shot_reference_topic = self.get_parameter("shot_reference_topic").value
         use_twist_stamped = bool(self.get_parameter("use_twist_stamped").value)
 
         if use_twist_stamped:
@@ -115,12 +144,21 @@ class SimpleRobotSim(Node):
         self.cmd_gimbal_sub = self.create_subscription(
             GimbalCmd, cmd_gimbal_topic, self.cmd_gimbal_callback, command_qos
         )
+        self.shot_reference_sub = self.create_subscription(
+            ShotReference,
+            shot_reference_topic,
+            self.shot_reference_callback,
+            command_qos,
+        )
 
         self.target_pub = self.create_publisher(TargetArray, target_topic, command_qos)
         self.platform_pub = self.create_publisher(PlatformState, platform_topic, state_qos)
         self.odom_pub = self.create_publisher(Odometry, "/odom", command_qos)
         self.joint_pub = self.create_publisher(JointState, "/joint_states", command_qos)
-        self.marker_pub = self.create_publisher(Marker, "/visualization_marker", command_qos)
+        marker_topic = self.get_parameter("marker_topic").value
+        marker_array_topic = self.get_parameter("marker_array_topic").value
+        self.marker_pub = self.create_publisher(Marker, marker_topic, command_qos)
+        self.marker_array_pub = self.create_publisher(MarkerArray, marker_array_topic, command_qos)
         self.tf_broadcaster = TransformBroadcaster(self)
 
         self.last_time = self.get_clock().now()
@@ -131,7 +169,8 @@ class SimpleRobotSim(Node):
 
         self.get_logger().info(
             f"Simple 2D robot sim started: target={target_topic}, platform={platform_topic}, "
-            f"cmd_vel={cmd_vel_topic} ({'TwistStamped' if use_twist_stamped else 'Twist'})"
+            f"cmd_vel={cmd_vel_topic} ({'TwistStamped' if use_twist_stamped else 'Twist'}), "
+            f"markers={marker_topic}/{marker_array_topic}"
         )
 
     def cmd_vel_stamped_callback(self, msg):
@@ -147,6 +186,9 @@ class SimpleRobotSim(Node):
     def cmd_gimbal_callback(self, msg):
         self.gimbal_yaw_rate = 0.0 if msg.hold_yaw else float(msg.yaw_rate)
         self.gimbal_pitch_rate = 0.0 if msg.hold_pitch else float(msg.pitch_rate)
+
+    def shot_reference_callback(self, msg):
+        self.latest_shot_reference = msg
 
     def update(self):
         now = self.get_clock().now()
@@ -193,7 +235,22 @@ class SimpleRobotSim(Node):
         elapsed = (now - self.start_time).nanoseconds * 1e-9
         phase = speed * elapsed
 
-        if motion == "static" or radius <= 1e-6 or speed <= 1e-6:
+        if motion == "static" or speed <= 1e-6:
+            return center_x, center_y
+        if motion in ("linear", "straight"):
+            heading = math.radians(float(self.get_parameter("target_line_heading_deg").value))
+            distance = speed * elapsed
+            loop_distance = max(
+                float(self.get_parameter("target_line_loop_distance").value),
+                0.0,
+            )
+            if loop_distance > 1e-6:
+                distance = math.fmod(distance, loop_distance)
+            return (
+                center_x + distance * math.cos(heading),
+                center_y + distance * math.sin(heading),
+            )
+        if radius <= 1e-6:
             return center_x, center_y
         if motion == "line":
             return center_x + radius * math.sin(phase), center_y
@@ -231,6 +288,8 @@ class SimpleRobotSim(Node):
 
         cx = 0.5 * image_width + ex * 0.5 * image_width
         cy = 0.5 * image_height
+        optical_x = depth * math.sin(image_angle)
+        optical_z = depth * math.cos(image_angle)
 
         return {
             "valid": valid,
@@ -238,6 +297,8 @@ class SimpleRobotSim(Node):
             "cy": cy,
             "ex": ex,
             "depth": depth,
+            "optical_x": optical_x,
+            "optical_z": optical_z,
             "xb": xb,
             "yb": yb,
             "target_x": target_x,
@@ -247,7 +308,7 @@ class SimpleRobotSim(Node):
     def publish_target(self, now, observation):
         msg = TargetArray()
         msg.header.stamp = now.to_msg()
-        msg.header.frame_id = "camera_link"
+        msg.header.frame_id = "camera_optical_link"
 
         if not observation["valid"]:
             msg.tracking_id = -1
@@ -277,7 +338,11 @@ class SimpleRobotSim(Node):
         target.width = float(target.bbox[2] - target.bbox[0])
         target.height = float(target.bbox[3] - target.bbox[1])
         target.confidence = 1.0
-        target.position = [float(observation["ex"] * depth), 0.0, float(depth)]
+        target.position = [
+            float(observation["optical_x"]),
+            0.0,
+            float(observation["optical_z"]),
+        ]
         target.velocity = [0.0, 0.0, 0.0]
         target.depth_confidence = 1.0
 
@@ -363,14 +428,33 @@ class SimpleRobotSim(Node):
         camera_tf.transform.rotation.z = qz
         camera_tf.transform.rotation.w = qw
 
-        self.tf_broadcaster.sendTransform([base_tf, yaw_tf, camera_tf])
+        optical_tf = TransformStamped()
+        optical_tf.header.stamp = now.to_msg()
+        optical_tf.header.frame_id = "camera_link"
+        optical_tf.child_frame_id = "camera_optical_link"
+        qx, qy, qz, qw = rpy_quaternion(-math.pi / 2.0, 0.0, -math.pi / 2.0)
+        optical_tf.transform.rotation.x = qx
+        optical_tf.transform.rotation.y = qy
+        optical_tf.transform.rotation.z = qz
+        optical_tf.transform.rotation.w = qw
+
+        self.tf_broadcaster.sendTransform([base_tf, yaw_tf, camera_tf, optical_tf])
 
     def publish_markers(self, now):
+        self.current_marker_array = MarkerArray()
         self.publish_robot_marker(now)
         self.publish_target_marker(now)
         self.publish_path_marker(now)
         self.publish_camera_sight_marker(now)
         self.publish_desired_distance_marker(now)
+        self.publish_virtual_shot_marker(now)
+        self.marker_array_pub.publish(self.current_marker_array)
+        self.current_marker_array = None
+
+    def publish_marker(self, marker):
+        self.marker_pub.publish(marker)
+        if self.current_marker_array is not None:
+            self.current_marker_array.markers.append(marker)
 
     def publish_robot_marker(self, now):
         marker = Marker()
@@ -392,7 +476,7 @@ class SimpleRobotSim(Node):
         marker.color.g = 0.45
         marker.color.b = 0.95
         marker.color.a = 0.9
-        self.marker_pub.publish(marker)
+        self.publish_marker(marker)
 
     def publish_target_marker(self, now):
         target_x, target_y = self.current_target_position(now)
@@ -414,7 +498,7 @@ class SimpleRobotSim(Node):
         marker.color.g = 0.2
         marker.color.b = 0.1
         marker.color.a = 0.95
-        self.marker_pub.publish(marker)
+        self.publish_marker(marker)
 
     def publish_path_marker(self, now):
         point = Point()
@@ -436,7 +520,7 @@ class SimpleRobotSim(Node):
         marker.color.b = 0.35
         marker.color.a = 0.85
         marker.points = self.path_points
-        self.marker_pub.publish(marker)
+        self.publish_marker(marker)
 
         target_x, target_y = self.current_target_position(now)
         target_point = Point()
@@ -459,7 +543,7 @@ class SimpleRobotSim(Node):
         target_marker.color.b = 0.05
         target_marker.color.a = 0.8
         target_marker.points = self.target_path_points
-        self.marker_pub.publish(target_marker)
+        self.publish_marker(target_marker)
 
     def camera_position(self):
         camera_yaw = self.robot_yaw + self.gimbal_yaw
@@ -494,7 +578,7 @@ class SimpleRobotSim(Node):
         target_point.y = float(target_y)
         target_point.z = 0.2
         marker.points = [camera_point, target_point]
-        self.marker_pub.publish(marker)
+        self.publish_marker(marker)
 
     def publish_desired_distance_marker(self, now):
         target_x, target_y = self.current_target_position(now)
@@ -524,7 +608,56 @@ class SimpleRobotSim(Node):
             point.z = 0.02
             points.append(point)
         marker.points = points
-        self.marker_pub.publish(marker)
+        self.publish_marker(marker)
+
+    def publish_virtual_shot_marker(self, now):
+        if self.latest_shot_reference is None or not self.latest_shot_reference.valid:
+            return
+
+        pose = self.latest_shot_reference.virtual_base_pose
+
+        marker = Marker()
+        marker.header.stamp = now.to_msg()
+        marker.header.frame_id = "odom"
+        marker.ns = "mvp_simple_sim"
+        marker.id = 6
+        marker.type = Marker.CUBE
+        marker.action = Marker.ADD
+        marker.pose = pose
+        marker.pose.position.z = 0.08
+        marker.scale.x = 0.32
+        marker.scale.y = 0.22
+        marker.scale.z = 0.16
+        marker.color.r = 0.1
+        marker.color.g = 0.9
+        marker.color.b = 0.45
+        marker.color.a = 0.85
+        self.publish_marker(marker)
+
+        target_x, target_y = self.current_target_position(now)
+        line = Marker()
+        line.header.stamp = now.to_msg()
+        line.header.frame_id = "odom"
+        line.ns = "mvp_simple_sim"
+        line.id = 7
+        line.type = Marker.LINE_STRIP
+        line.action = Marker.ADD
+        line.scale.x = 0.025
+        line.color.r = 0.1
+        line.color.g = 0.9
+        line.color.b = 0.45
+        line.color.a = 0.8
+
+        target_point = Point()
+        target_point.x = float(target_x)
+        target_point.y = float(target_y)
+        target_point.z = 0.08
+        virtual_point = Point()
+        virtual_point.x = float(pose.position.x)
+        virtual_point.y = float(pose.position.y)
+        virtual_point.z = 0.08
+        line.points = [target_point, virtual_point]
+        self.publish_marker(line)
 
 
 def main(args=None):

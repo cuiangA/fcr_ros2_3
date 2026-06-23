@@ -1,0 +1,18 @@
+command_safety_filter_node:
+  ros__parameters:
+    raw_cmd_vel_topic: /control/cmd_vel_raw
+    raw_gimbal_topic: /control/cmd_gimbal_raw
+    platform_state_topic: /platform/state
+    reference_topic: /shot/reference
+    cmd_vel_topic: /cmd_vel
+    cmd_gimbal_topic: /cmd_gimbal
+    base_frame: base_link
+    update_rate_hz: 50.0
+    raw_timeout_sec: 0.25
+    reference_timeout_sec: 0.5
+    platform_timeout_sec: 0.5
+    max_vx: 0.8
+    max_vy: 0.5
+    max_wz: 1.2
+    max_gimbal_yaw_rate: 1.5
+    max_gimbal_pitch_rate: 1.0

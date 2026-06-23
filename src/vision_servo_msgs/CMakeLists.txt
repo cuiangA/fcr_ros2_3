@@ -40,12 +40,15 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ServoState.msg"      # 伺服控制器内部状态（误差、收敛率、控制模式）
   "msg/PlatformState.msg"   # 机器人平台状态（底盘速度 + 云台角度）
   "msg/GimbalCmd.msg"       # 云台控制指令（yaw/pitch 角度或角速度）
+  "msg/TargetState.msg"     # 稳定控制坐标系下的目标状态（位置 + 速度）
+  "msg/ShotReference.msg"   # 跟随/运镜共用的虚拟拍摄位姿参考
   # ── 服务定义 ──────────────────────────────────────────────────
   "srv/SetTrackingTarget.srv" # 设置/切换跟踪目标（请求：目标 ID，响应：成功/失败）
   "srv/SetServoMode.srv"      # 切换伺服控制模式（IBVS/PBVS/MPC/RL）
   "srv/CalibrateCamera.srv"   # 触发相机标定流程（内参 + 外参）
   # ── 动作定义 ──────────────────────────────────────────────────
-  "action/VisualServo.action" # 视觉伺服长周期任务（可取消、可反馈进度）
+  "action/VisualServo.action"   # 视觉伺服长周期任务（可取消、可反馈进度）
+  "action/CinematicShot.action" # 目标相对运镜任务（绕拍/推拉/侧跟等）
   DEPENDENCIES
     std_msgs            # 基础消息类型（Header, String, Float32 等）
     geometry_msgs       # 几何消息类型（Pose, Twist, Vector3 等）

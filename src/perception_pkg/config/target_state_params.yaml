@@ -1,0 +1,11 @@
+target_state_estimator_node:
+  ros__parameters:
+    target_topic: /target/current
+    output_topic: /target/state
+    output_frame: odom
+    fallback_input_frame: camera_optical_link
+    target_id: -1
+    velocity_filter_alpha: 0.35
+    min_dt: 0.005
+    max_dt: 0.5
+    transform_timeout_sec: 0.05

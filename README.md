@@ -1,6 +1,6 @@
 # FCR ROS2 Visual Servoing Workspace (fcr_ros2_3)
 
-基于 ROS2 Humble 的智能跟拍机器人项目。LEKIWI 三轮全向底盘 + DJI RS2 云台相机 + YOLO 目标检测 + IBVS/PBVS 视觉伺服。
+基于 ROS2 Humble 的智能 Vlog 跟拍机器人项目。目标硬件为 TRON2 底盘 + DJI RS2 云台 + Sony ZV-E10 II + Orbbec 335 深度相机；当前代码保留 LEKIWI/三轮全向仿真抽象，用于验证视觉伺服和运镜控制链路。
 
 ---
 
@@ -20,7 +20,7 @@ V4  MPC/优化      █░░░░░░░░░░░░░░░░░░░
 | V1 | 图像误差控制 + 距离控制 + 云台偏角补偿 | ✅ 基本完成（YOLO 推理为占位） |
 | V2 | V1 + 滤波 + 死区 + 限幅 + 目标锁定 | ✅ 大部分完成 |
 | V3 | 云台 IBVS + 底盘 PBVS + 控制分配 | ✅ 算法完成，架构待拆分 |
-| V4 | QP / MPC 协同控制 | ❌ 未开始 |
+| V4 | 虚拟拍摄位姿 / QP / MPC 协同控制 | ⚠️ 已加入虚拟运镜骨架，MPC 未开始 |
 
 ---
 
@@ -30,7 +30,7 @@ V4  MPC/优化      █░░░░░░░░░░░░░░░░░░░
 fcr_ros2_3/
 ├── build.sh
 ├── src/
-│   ├── vision_servo_msgs/       # 接口定义包（5 msg, 3 srv, 1 action）
+│   ├── vision_servo_msgs/       # 接口定义包（7 msg, 3 srv, 2 action）
 │   ├── perception_pkg/          # 感知管线（检测→跟踪→深度估计）
 │   ├── servo_control_pkg/       # 伺服控制（IBVS/PBVS/MPC/RL + MVP跟拍）
 │   ├── robot_platform_pkg/      # 硬件平台（底盘/云台/IMU/里程计）
@@ -76,6 +76,33 @@ mvp_follow_controller_node    ← 自包含，不依赖 pluginlib / ControlAlloc
 /cmd_vel + /cmd_gimbal
 ```
 
+### 实验性运镜链路（真实目标 + 虚拟拍摄位姿）
+
+```
+/target/current
+      ↓
+TargetStateEstimatorNode
+      ↓
+/target/state  ───────────────┐
+                               ↓
+                      ShotReferenceGeneratorNode
+                               ↓
+                         /shot/reference
+                               ↓
+              ┌────────────────┴────────────────┐
+              ↓                                 ↓
+     BasePoseControllerNode           GimbalTargetControllerNode
+              ↓                                 ↓
+    /control/cmd_vel_raw          /control/cmd_gimbal_raw
+              └────────────────┬────────────────┘
+                               ↓
+                    CommandSafetyFilterNode
+                               ↓
+                    /cmd_vel + /cmd_gimbal
+```
+
+核心原则：云台始终用真实目标做软锁定和构图控制；底盘在跟随模式下追真实目标的固定相对位姿，在运镜模式下追随围绕真实目标生成的虚拟拍摄位姿。
+
 ---
 
 ## 3. 各模块实现状态
@@ -87,6 +114,7 @@ mvp_follow_controller_node    ← 自包含，不依赖 pluginlib / ControlAlloc
 | YOLO 检测 (DetectionNode) | ⚠️ 占位 | `infer()` 为空；架构完整，支持 ONNX/TensorRT/OpenCV DNN 三种推理路径 |
 | 多目标跟踪 (MultiObjectTracker) | ✅ 完成 | 8 状态 Kalman [x,y,w,h,vx,vy,vw,vh] + IoU 匈牙利贪心匹配 |
 | 深度估计 (DepthEstimatorNode) | ✅ 完成 | 双缓存异步融合：深度图采样（优先）→ bbox 面积推算（回退） |
+| 目标状态估计 (TargetStateEstimatorNode) | ✅ 新增 | 将相机光学坐标系目标点 TF 到 `odom`，并估计目标速度 |
 | 组合流水线 (PerceptionPipeline) | ✅ 完成 | ComposableNode，detection→tracking→depth 三阶段零拷贝 |
 
 **跟踪器核心逻辑** ([multi_object_tracker.cpp](src/perception_pkg/src/multi_object_tracker.cpp))：
@@ -113,6 +141,10 @@ mvp_follow_controller_node    ← 自包含，不依赖 pluginlib / ControlAlloc
 | ControlAllocator | ✅ 完成 | 优先级分配：云台优先旋转，底盘负责平移+剩余旋转 |
 | ServoManagerNode | ✅ 完成 | 50Hz 控制循环，pluginlib 加载，VisualServo Action，SetServoMode 服务 |
 | MvpFollowControllerNode | ✅ 完成 | 三通道解耦 P 控制 + 单点 IBVS 模式，两级滤波，死区 |
+| ShotReferenceGeneratorNode | ✅ 新增 | 生成跟随/运镜共用的虚拟拍摄位姿，支持 orbit/dolly/truck/arc/pan/recenter |
+| BasePoseControllerNode | ✅ 新增 | 底盘追踪虚拟拍摄位姿，输出 `/control/cmd_vel_raw` |
+| GimbalTargetControllerNode | ✅ 新增 | 云台始终追真实目标图像位置，输出 `/control/cmd_gimbal_raw` |
+| CommandSafetyFilterNode | ✅ 新增 | 急停、陈旧数据检测、限幅，统一输出最终 `/cmd_vel` 和 `/cmd_gimbal` |
 | MPC 控制器 | ❌ 占位 | 仅有头文件，QP 求解器接口预留 |
 | RL 控制器 | ❌ 占位 | 仅有头文件，ONNX 推理接口预留 |
 
@@ -156,13 +188,14 @@ base_wz      =  Kb · q_yaw        (追云台偏角，不追图像误差)
 | target_simulator.py | ✅ 完成 | 圆形/8字形/直线轨迹，支持 TF 变换链 |
 | mock_target_publisher.py | ✅ 完成 | 合成 TargetArray（center/left/right/up/down/far/near/lost/sinusoidal） |
 | simple_robot_sim_node.py | ✅ 完成 | 轻量 2D 闭环仿真（不依赖 Gazebo），用于 MVP 测试 |
+| virtual shot markers | ✅ 新增 | 2D 仿真中显示虚拟拍摄位姿和目标-拍摄位姿连线 |
 | camera_simulator.py | ✅ 完成 | 发布 camera_info（TRANSIENT_LOCAL QoS） |
 
 ---
 
 ## 4. 接口定义
 
-### Messages（5个）
+### Messages（7个）
 
 | Message | 关键字段 |
 |---------|---------|
@@ -171,6 +204,8 @@ base_wz      =  Kb · q_yaw        (追云台偏角，不追图像误差)
 | `ServoState` | state (IDLE/CONVERGING/TRACKING/LOST/ERROR), feature_error[6], condition_number, camera_velocity[6], gimbal_velocity[2], chassis_velocity[3] |
 | `PlatformState` | chassis_pose[3], chassis_velocity[3], gimbal_yaw/pitch/yaw_rate/pitch_rate, angular_velocity[3], emergency_stop, system_mode |
 | `GimbalCmd` | yaw_rate, pitch_rate, hold_yaw, hold_pitch |
+| `TargetState` | odom frame 下的目标 position/velocity/speed，保留 image_center/bbox 给云台构图 |
+| `ShotReference` | 虚拟底盘位姿、运镜类型、状态机状态、速度预算、构图目标 |
 
 ### Services（3个）
 
@@ -180,11 +215,12 @@ base_wz      =  Kb · q_yaw        (追云台偏角，不追图像误差)
 | `SetServoMode` | 运行时热切换 IBVS(0)/PBVS(1)/HYBRID(2)/MPC(3)/RL(4) |
 | `CalibrateCamera` | 触发相机标定 |
 
-### Actions（1个）
+### Actions（2个）
 
 | Action | 用途 |
 |--------|------|
 | `VisualServo` | 长时间伺服任务，含目标设定、误差容限、超时、实时反馈和取消 |
+| `CinematicShot` | 目标相对运镜任务，支持推拉、绕拍、侧跟、弧线推进、取消和反馈 |
 
 ---
 
@@ -200,6 +236,8 @@ base_wz      =  Kb · q_yaw        (追云台偏角，不追图像误差)
 | IMU `/imu/data` | BEST_EFFORT | KEEP_LAST | 5 | VOLATILE |
 | 平台状态 `/platform/state` | RELIABLE | KEEP_LAST | 10 | TRANSIENT_LOCAL |
 | 伺服状态 `/servo/state` | RELIABLE | KEEP_LAST | 5 | VOLATILE |
+| 目标状态 `/target/state` | RELIABLE | KEEP_LAST | 10 | VOLATILE |
+| 运镜参考 `/shot/reference` | RELIABLE | KEEP_LAST | 10 | VOLATILE |
 
 ---
 
@@ -238,6 +276,15 @@ ros2 launch servo_control_pkg mvp_mock_test.launch.py scenario:=left
 # MVP 2D 闭环仿真
 ros2 launch servo_control_pkg mvp_2d_sim.launch.py rviz:=true
 
+# 虚拟运镜 2D 闭环仿真
+ros2 launch servo_control_pkg virtual_shot_2d_sim.launch.py shot_name:=orbit rviz:=true
+
+# Foxglove 2D 环绕运镜验证：目标慢速直线运动，机器人连续绕目标运镜
+ros2 launch servo_control_pkg orbit_foxglove_2d_sim.launch.py
+
+# 如果已安装 foxglove_bridge，可同时启动 WebSocket bridge
+ros2 launch servo_control_pkg orbit_foxglove_2d_sim.launch.py foxglove_bridge:=true
+
 # 完整仿真（Gazebo + 全部节点）
 ros2 launch bringup_pkg fcr_sim_bringup.launch.py
 
@@ -247,7 +294,16 @@ ros2 service call /servo/set_mode vision_servo_msgs/srv/SetServoMode "{mode: 1}"
 # 查看控制输出
 ros2 topic echo /cmd_vel
 ros2 topic echo /cmd_gimbal
+ros2 topic echo /shot/reference
 ```
+
+Foxglove 可视化建议添加：
+
+- `3D Panel`：Fixed frame 设为 `odom`
+- `/tf`：查看 `odom -> base_link -> gimbal_yaw_link -> camera_link -> camera_optical_link`
+- `/odom`：机器人位姿
+- `/visualization_marker_array`：机器人、目标、目标轨迹、机器人轨迹、环绕半径、虚拟拍摄位姿
+- `/shot/reference`：确认 `shot_type=5`、`state=4/5`、`orbit_radius` 和 `orbit_angle`
 
 ---
 
@@ -260,7 +316,9 @@ ros2 topic echo /cmd_gimbal
 ### 中优先级
 
 - **真实硬件驱动** — LEKIWI 底盘串口、DJI RS2 云台 CAN 总线、BNO055 IMU I2C 通信均为 TODO
-- **架构拆分** — 按 V3 规划将 TF 变换、IBVS/PBVS 控制器拆分为独立节点
+- **TRON2 / DJI RS2 / Sony / Orbbec 实机接入** — 当前新增运镜链路已预留接口，真实 SDK、外参标定和设备状态反馈为 TODO
+- **Sony 与 Orbbec 外参标定** — 推荐二者同装云台，固定 `sony_optical_frame` 与 `orbbec_optical_frame` 的 TF；标定流程和标定文件加载为 TODO
+- **障碍物和碰撞约束** — 当前虚拟拍摄位姿只考虑目标相对几何，不包含局部避障、安全距离和可通行区域
 - **`velocity_commander_node` 完善** — 当前仅处理 Twist linear 分量，角速度读取为 TODO
 
 ### 低优先级（论文扩展方向）
@@ -278,3 +336,5 @@ ros2 topic echo /cmd_gimbal
 3. **插件化控制器** — pluginlib + 抽象基类，运行时热切换，方便论文扩展。
 4. **Factory Pattern 实/仿共用** — 硬件接口层通过 `use_sim` 参数切换，上层算法代码完全不变。
 5. **ComposableNode 零拷贝** — 感知三阶段同进程顺序调用，消除序列化开销。
+6. **真实目标和虚拟拍摄位姿解耦** — 云台数据流始终追真实目标；底盘数据流在运镜模式下追虚拟拍摄位姿，在跟随模式下追固定目标相对位姿。
+7. **目标速度进入运镜状态机** — `TargetStateEstimatorNode` 在 `odom` 下估计目标速度；当目标速度或所需底盘速度超过预算时，`ShotReferenceGeneratorNode` 进入限速、保持或跟随回退状态。

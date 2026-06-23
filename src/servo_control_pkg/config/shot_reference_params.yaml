@@ -1,0 +1,32 @@
+shot_reference_generator_node:
+  ros__parameters:
+    target_state_topic: /target/state
+    platform_state_topic: /platform/state
+    output_topic: /shot/reference
+    action_name: /shot/execute
+    output_frame: odom
+    update_rate_hz: 30.0
+    auto_start: true
+    loop_auto_start_shot: false
+    default_shot_name: orbit
+    default_shot_type: 5
+    default_duration: 16.0
+    default_radius: 2.0
+    default_angle_deg: 180.0
+    default_start_distance: 2.8
+    default_end_distance: 1.6
+    default_lateral_offset: 1.5
+    default_longitudinal_offset: -2.0
+    desired_composition_u: 0.5
+    desired_composition_v: 0.5
+    max_base_speed: 0.8
+    max_base_yaw_rate: 1.2
+    max_gimbal_yaw_rate: 1.5
+    max_gimbal_pitch_rate: 1.0
+    tracking_error_gain: 0.8
+    speed_limit_threshold: 0.85
+    hold_speed_scale_threshold: 0.2
+    target_speed_fallback_threshold: 1.2
+    allow_follow_fallback: true
+    target_stale_timeout: 0.5
+    platform_stale_timeout: 0.5

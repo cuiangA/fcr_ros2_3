@@ -25,10 +25,12 @@
   <!-- 依赖（depend = build_depend + exec_depend） -->
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>   <!-- 可组合节点注册 -->
+  <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>         <!-- 图像和相机信息消息 -->
   <depend>vision_servo_msgs</depend>   <!-- 自定义目标/检测消息 -->
   <depend>cv_bridge</depend>           <!-- libopencv-dev ↔ ROS 图像转换 -->
   <depend>image_transport</depend>     <!-- 高效的图像发布/订阅 -->
+  <depend>tf2</depend>
   <depend>tf2_ros</depend>             <!-- 坐标变换 -->
   <depend>tf2_geometry_msgs</depend>
   <depend>libopencv-dev</depend>              <!-- 图像处理与 DNN 推理 -->

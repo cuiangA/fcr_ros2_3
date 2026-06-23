@@ -1,0 +1,41 @@
+# CinematicShot.action - execute a target-relative cinematic shot
+
+uint8 SHOT_FOLLOW=0
+uint8 SHOT_PAN=1
+uint8 SHOT_RECENTER=2
+uint8 SHOT_DOLLY_IN=3
+uint8 SHOT_DOLLY_OUT=4
+uint8 SHOT_ORBIT=5
+uint8 SHOT_TRUCK=6
+uint8 SHOT_ARC_IN=7
+
+uint8 shot_type
+int32 target_id
+float32 duration
+float32 radius
+float32 angle
+bool clockwise
+float32 start_distance
+float32 end_distance
+float32 longitudinal_offset
+float32 lateral_offset
+float32 composition_start_u
+float32 composition_start_v
+float32 composition_end_u
+float32 composition_end_v
+float32 max_base_speed
+float32 max_base_yaw_rate
+float32 max_gimbal_yaw_rate
+float32 max_gimbal_pitch_rate
+bool return_to_follow
+---
+bool success
+uint8 final_state
+string message
+---
+float32 progress
+uint8 state
+float32 speed_scale
+float32 target_speed
+float32 required_base_speed
+string status
