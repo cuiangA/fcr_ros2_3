@@ -1,0 +1,68 @@
+@startuml fcr_layered_architecture
+' =============================================================================
+' FCR ROS2 Workspace — Perception-to-Actuation Layered Flow
+' =============================================================================
+
+skinparam backgroundColor #FEFEFE
+skinparam shadowing false
+skinparam ArrowColor #444444
+skinparam rectangleBorderColor #333333
+skinparam rectangleFontSize 13
+skinparam noteBorderColor #888888
+skinparam noteBackgroundColor #FFFFEE
+
+title FCR ROS2 智能跟拍机器人 — 感知到执行主流程
+
+left to right direction
+
+rectangle "传感器输入层\nL1 Sensors\nSony RGB / Depth Camera\nCameraInfo / IMU" as sensors #E8E8E8
+
+rectangle "视觉感知层\nL2 perception_pkg\nYOLO Detection\nTracking\nDepth Estimation" as perception #DDEEFF
+
+rectangle "目标状态层\nL3 Target State\nTargetArray\n3D Position\nTracking ID" as target_state #DDEEFF
+
+rectangle "视觉伺服控制层\nL4 servo_control_pkg\nMVP / IBVS / PBVS\nServoManager" as servo #DDFFDD
+
+rectangle "控制分配层\nL5 ControlAllocator\ncamera velocity\n-> chassis + gimbal" as allocator #DDFFDD
+
+rectangle "平台驱动层\nL6 robot_platform_pkg\nChassisDriver\nGimbalDriver\nPlatformManager" as platform #FFDDDD
+
+rectangle "执行器层\nL7 Actuators\nMobile Chassis\nDJI RS2 Gimbal" as actuators #E8E8E8
+
+sensors --> perception : /camera/image_raw\n/camera/depth/image_raw
+perception --> target_state : /perception/detections\n/perception/tracks
+target_state --> servo : /perception/targets_3d
+servo --> allocator : camera velocity\n6-DOF control
+allocator --> platform : /cmd_vel\n/cmd_gimbal
+platform --> actuators : serial / CAN / SDK\nor Gazebo plugin
+
+platform -[#3366AA,dashed]-> servo : /platform/state\nodom + gimbal + IMU
+actuators -[#3366AA,dashed]-> sensors : 运动改变视角\n形成闭环反馈
+
+rectangle "公共接口层\nvision_servo_msgs / QoS / TF\nTargetArray / PlatformState / ServoState / GimbalCmd" as common #E2F0D9
+common .. target_state : Target
+common .. servo : Action / Service\nServoState
+common .. platform : PlatformState\nGimbalCmd
+
+rectangle "旁路支撑\nbringup_pkg / simulation_pkg\nLaunch / RViz / Gazebo / Mock / rosbag2" as support #EEEEFF
+support .. sensors : 仿真图像 / mock 输入
+support .. platform : 仿真平台 / 可视化 / 记录
+
+note top of perception
+  输入图像变成可跟踪目标
+end note
+
+note top of servo
+  根据目标误差计算相机运动需求
+end note
+
+note top of allocator
+  把相机运动拆成底盘和云台命令
+end note
+
+note bottom of platform
+  执行命令并发布平台状态反馈
+end note
+
+@enduml
+

@@ -195,6 +195,16 @@ bool bbox_looks_normalized(const Target& target)
   });
 }
 
+/// 判断 bbox 是否包含正面积，避免默认 [0,0,0,0] 被误当作有效观测。
+bool bbox_has_positive_area(const Target& target)
+{
+  return std::all_of(
+    target.bbox.begin(), target.bbox.end(),
+    [](float value) { return std::isfinite(value); }) &&
+    target.bbox[2] > target.bbox[0] &&
+    target.bbox[3] > target.bbox[1];
+}
+
 }  // namespace
 
 class MvpFollowControllerNode final : public rclcpp::Node
@@ -592,9 +602,17 @@ private:
   {
     double cx = target.center[0];
     double cy = target.center[1];
+    const bool bbox_valid = bbox_has_positive_area(target);
+    const bool center_finite = std::isfinite(cx) && std::isfinite(cy);
+    const bool default_zero_center_without_bbox =
+      center_finite && cx == 0.0 && cy == 0.0 && !bbox_valid;
 
-    // center 字段可能为空（NaN），回退到 bbox 中心
-    if ((!std::isfinite(cx) || !std::isfinite(cy)) && std::isfinite(target.bbox[0])) {
+    // center 字段可能为空或保持默认零值，回退到 bbox 中心。
+    if (!center_finite || default_zero_center_without_bbox) {
+      if (!bbox_valid) {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        return {nan, nan};
+      }
       cx = 0.5 * (target.bbox[0] + target.bbox[2]);
       cy = 0.5 * (target.bbox[1] + target.bbox[3]);
     }
@@ -628,6 +646,8 @@ private:
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 1000,
         "MVP target lost or invalid; publishing zero base and gimbal commands");
+      has_valid_target_ = false;
+      reset_measurement_filters();
       reset_command_filters();
       publish_zero_command();
       return;
@@ -972,6 +992,16 @@ private:
     filtered_base_wz_ = 0.0;
     filtered_gimbal_yaw_vel_ = 0.0;
     filtered_gimbal_pitch_vel_ = 0.0;
+  }
+
+  /// 重置测量滤波器，使重新捕获目标时不会混入上一目标的误差历史。
+  void reset_measurement_filters()
+  {
+    error_filter_initialized_ = false;
+    depth_filter_initialized_ = false;
+    filtered_ex_ = 0.0;
+    filtered_ey_ = 0.0;
+    filtered_depth_ = 0.0;
   }
 
   /// 安全停车：发布所有通道的零指令。

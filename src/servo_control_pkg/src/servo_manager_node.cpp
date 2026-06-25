@@ -53,7 +53,7 @@
  *     - 接受目标 ID、期望深度、收敛容差、超时时间
  *     - 阻塞等待目标出现和相机标定完成
  *     - 周期性发布反馈（当前误差、进度百分比）
- *     - TRACKING 状态 → succeed；超时/取消 → cancel/abort
+ *     - TRACKING 状态持续跟随；到达时长/超时或取消后结束
  *     - 独占执行：同一时刻只允许一个 action
  *
  * ── 自动启动（auto_start）─────────────────────────────────────────
@@ -514,12 +514,12 @@ private:
    *                              │
    *                              ▼
    *   ┌──────────────────────────────────────────────────────────────────┐
-   *   │ 阶段 2：等待收敛（轮询 control_loop 输出的伺服状态）               │
+   *   │ 阶段 2：持续跟随（轮询 control_loop 输出的伺服状态）               │
    *   │                                                                  │
    *   │   每 100ms 检查一次：                                             │
-   *   │     - TRACKING → succeed（伺服误差已降至容差以下）                 │
+   *   │     - TRACKING → 继续跟随并发布反馈                                │
    *   │     - 目标丢失（target_stale）→ 状态标记为 LOST，继续等待          │
-   *   │     - 超时 → abort（伺服未在期限内收敛）                           │
+   *   │     - 到达 timeout → 若仍在 TRACKING 则 succeed，否则 abort         │
    *   │     - 取消 → cancel（用户主动取消）                               │
    *   │                                                                  │
    *   │   每轮迭代均发布反馈（current_error, progress, servo_state）。     │
@@ -576,7 +576,7 @@ private:
       std::this_thread::sleep_for(std::chrono::milliseconds(100));  // 10 Hz 轮询
     }
 
-    // ── 阶段 2：等待伺服收敛 ────────────────────────────────────────
+    // ── 阶段 2：持续跟随，直到取消或达到目标持续时长 ─────────────────
     while (rclcpp::ok()) {
       if (goal_handle->is_canceling()) {
         finish_action(goal_handle, result, false, "伺服任务已取消", true, start_time);
@@ -596,20 +596,13 @@ private:
 
       publish_action_feedback(goal_handle, state.norm_error, state.state);
 
-      if (state.state == vision_servo_msgs::msg::ServoState::TRACKING) {
-        // 控制回路已收敛 → 任务成功
-        result->success = true;
-        result->message = "伺服误差已收敛";
-        result->final_error = state.norm_error;
-        result->elapsed_time = static_cast<float>((this->now() - start_time).seconds());
-        servo_active_.store(false);
-        publish_zero_command(this->now());
-        goal_handle->succeed(result);
-        return;
-      }
-
       if ((this->now() - start_time).seconds() > timeout_sec) {
-        finish_action(goal_handle, result, false, "伺服任务超时", false, start_time);
+        const bool completed_while_tracking =
+          state.state == vision_servo_msgs::msg::ServoState::TRACKING;
+        finish_action(
+          goal_handle, result, completed_while_tracking,
+          completed_while_tracking ? "伺服任务达到持续跟随时长" : "伺服任务超时",
+          false, start_time);
         return;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(100));  // 10 Hz 轮询

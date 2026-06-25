@@ -45,6 +45,8 @@ class TargetSimulator(Node):
       - radius     (float,  默认 1.0):     圆形/八字形的特征半径，单位米
       - speed      (float,  默认 0.5):     角速度或线速度，单位取决于轨迹类型
       - height     (float,  默认 1.0):     目标在 Z 轴上的高度，单位米
+      - center_x   (float,  默认 0.0):     轨迹中心在 odom X 轴的位置，单位米
+      - center_y   (float,  默认 0.0):     轨迹中心在 odom Y 轴的位置，单位米
     """
 
     def __init__(self):
@@ -56,10 +58,20 @@ class TargetSimulator(Node):
         self.declare_parameter("radius", 1.0)
         self.declare_parameter("speed", 0.5)
         self.declare_parameter("height", 1.0)
+        self.declare_parameter("center_x", 0.0)
+        self.declare_parameter("center_y", 0.0)
         self.declare_parameter("publish_target_array", False)
         self.declare_parameter("camera_frame", "camera_link")
         self.declare_parameter("publish_gazebo_model_state", True)
         self.declare_parameter("gazebo_model_name", "target_box")
+        self.declare_parameter("image_width", 640)
+        self.declare_parameter("image_height", 480)
+        self.declare_parameter("camera_fx", 600.0)
+        self.declare_parameter("camera_fy", 600.0)
+        self.declare_parameter("camera_cx", 320.0)
+        self.declare_parameter("camera_cy", 240.0)
+        self.declare_parameter("target_size_m", 0.3)
+        self.declare_parameter("min_depth", 0.05)
 
         # ── 2. 创建发布者 ──────────────────────────────────────────
         # 队列深度 10：允许短暂的处理抖动而不丢失目标数据
@@ -98,7 +110,7 @@ class TargetSimulator(Node):
 
         # ── 4. 50 Hz 更新频率 = 20ms 间隔，确保轨迹平滑 ────────────
         self.timer = self.create_timer(0.02, self.update)
-        self.t = 0.0  # 累计时间参数，驱动轨迹方程
+        self.start_time = self.get_clock().now()
 
     def odom_callback(self, msg):
         """里程计回调 — 缓存机器人当前位姿（odom 坐标系下）。"""
@@ -186,38 +198,83 @@ class TargetSimulator(Node):
 
         return [cam_x, cam_y, cam_z]
 
+    def project_to_image(self, cam_pos):
+        """将相机光心坐标系下的目标中心投影为图像观测。"""
+        image_width = int(self.get_parameter("image_width").value)
+        image_height = int(self.get_parameter("image_height").value)
+        fx = float(self.get_parameter("camera_fx").value)
+        fy = float(self.get_parameter("camera_fy").value)
+        cx = float(self.get_parameter("camera_cx").value)
+        cy = float(self.get_parameter("camera_cy").value)
+        target_size = max(float(self.get_parameter("target_size_m").value), 1e-3)
+        min_depth = max(float(self.get_parameter("min_depth").value), 1e-6)
+
+        cam_x, cam_y, cam_z = cam_pos
+        if cam_z <= min_depth:
+            return None
+
+        u = fx * cam_x / cam_z + cx
+        v = fy * cam_y / cam_z + cy
+        bbox_w = abs(fx * target_size / cam_z)
+        bbox_h = abs(fy * target_size / cam_z)
+
+        x_min = u - 0.5 * bbox_w
+        y_min = v - 0.5 * bbox_h
+        x_max = u + 0.5 * bbox_w
+        y_max = v + 0.5 * bbox_h
+
+        if x_max <= 0.0 or y_max <= 0.0 or x_min >= image_width or y_min >= image_height:
+            return None
+
+        x_min = max(0.0, min(float(image_width), x_min))
+        y_min = max(0.0, min(float(image_height), y_min))
+        x_max = max(0.0, min(float(image_width), x_max))
+        y_max = max(0.0, min(float(image_height), y_max))
+
+        if x_max - x_min <= 1.0 or y_max - y_min <= 1.0:
+            return None
+
+        return {
+            "center": [float(u), float(v)],
+            "bbox": [float(x_min), float(y_min), float(x_max), float(y_max)],
+            "width": float(x_max - x_min),
+            "height": float(y_max - y_min),
+        }
+
     def update(self):
         """
         @brief 定时器回调 — 根据 trajectory 参数计算当前位置并发布位姿和标记。
 
-        每次调用递增 self.t，使轨迹沿时间轴推进。50 Hz 的更新频率保证
+        使用 ROS 时钟计算轨迹时间，使仿真时间和系统时间保持一致。50 Hz 的更新频率保证
         RViz 中显示的球体运动平滑无抖动。
         """
-        traj = self.get_parameter("trajectory").value
+        now = self.get_clock().now()
+        elapsed = (now - self.start_time).nanoseconds * 1e-9
+        traj = str(self.get_parameter("trajectory").value).lower()
         r = self.get_parameter("radius").value
         speed = self.get_parameter("speed").value
         h = self.get_parameter("height").value
+        center_x = self.get_parameter("center_x").value
+        center_y = self.get_parameter("center_y").value
 
         # ── 根据轨迹类型计算目标在当前时刻的 X/Y 位置（odom 坐标系）──
         if traj == "circle":
             # 标准参数方程：x = r*cos(wt), y = r*sin(wt)
-            x = r * math.cos(speed * self.t)
-            y = r * math.sin(speed * self.t)
+            x = center_x + r * math.cos(speed * elapsed)
+            y = center_y + r * math.sin(speed * elapsed)
         elif traj == "figure8":
             # Lissajous 曲线：x = R*sin(wt), y = R/2*sin(2wt)
             # 八字形交叉可测试控制器的方向切换能力
-            x = r * math.sin(speed * self.t)
-            y = r * math.sin(2 * speed * self.t) / 2
+            x = center_x + r * math.sin(speed * elapsed)
+            y = center_y + r * math.sin(2 * speed * elapsed) / 2
         else:  # line
             # 沿 X 轴匀速运动，从 x=-1.0 开始向右移动
-            x = self.t * speed - 1.0
-            y = 0.0
-
-        self.t += 0.02  # 与定时器周期保持一致
+            x = center_x + elapsed * speed - r
+            y = center_y
 
         # ── 组装并发布 PoseStamped 消息（odom 坐标系，RViz 可视化用） ──
         pose = PoseStamped()
-        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.header.stamp = now.to_msg()
         pose.header.frame_id = "odom"  # 以里程计坐标系为参考
         pose.pose.position.x = x
         pose.pose.position.y = y
@@ -247,22 +304,31 @@ class TargetSimulator(Node):
         if self.target3d_pub is not None:
             # 将目标位置从 odom 坐标系转换到相机光心坐标系
             cam_pos = self.transform_to_camera_frame(x, y, h)
+            projection = self.project_to_image(cam_pos)
+
+            target_array = TargetArray()
+            target_array.header = pose.header
+            target_array.header.frame_id = self.camera_frame_
+            target_array.tracking_id = 0 if projection is not None else -1
+
+            if projection is None:
+                self.target3d_pub.publish(target_array)
+                return
 
             target = Target()
+            target.header = target_array.header
+            target.id = 0
             target.class_name = "target"
             target.confidence = 0.9
             target.depth_confidence = 1.0
             # 位置：相机光心坐标系 (camera_optical_link) 下的 3D 坐标
             target.position = cam_pos
-            # 填充虚拟的图像特征（供 IBVS 控制器使用）
-            # bbox：640x480 图像中央的 80x80 像素框
-            target.bbox = [280.0, 200.0, 360.0, 280.0]
-            target.center = [320.0, 240.0]
-            target_array = TargetArray()
-            target_array.header = pose.header
-            target_array.header.frame_id = self.camera_frame_
+            target.velocity = [0.0, 0.0, 0.0]
+            target.center = projection["center"]
+            target.bbox = projection["bbox"]
+            target.width = projection["width"]
+            target.height = projection["height"]
             target_array.targets = [target]
-            target_array.tracking_id = 0
             self.target3d_pub.publish(target_array)
 
 

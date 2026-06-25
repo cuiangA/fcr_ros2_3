@@ -14,6 +14,7 @@ PlantUML (.puml) 格式的完整UML图集，覆盖系统架构各层面。
 | 6 | `06_deployment_diagram.puml` | **Deployment Diagram** | 工控机+Jetson+地面站三节点部署，DDS网络配置 |
 | 7 | `07_state_machine.puml` | **State Machine** | VisualServo Action状态机：IDLE→CONVERGING→TRACKING→LOST→ERROR |
 | 8 | `08_launch_sequence.puml` | **Sequence Diagram** | Launch分层启动时序：Phase1(0s)→Phase2(2s)→Phase3(3s)→Phase4(4s) |
+| 9 | `09_layered_architecture.puml` | **Layered Architecture** | 从人机交互/任务层到硬件执行层的分层架构、横向公共接口和仿真支撑 |
 
 ## 渲染方式
 

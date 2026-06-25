@@ -13,13 +13,15 @@ ROS2 控制层负责：目标生成、视觉伺服、平台状态聚合
 
 用法：
   ros2 launch bringup_pkg fcr_sim_bringup.launch.py
-  ros2 launch bringup_pkg fcr_sim_bringup.launch.py trajectory:=circle speed:=0.3
+  ros2 launch bringup_pkg fcr_sim_bringup.launch.py trajectory:=figure8 use_foxglove:=true
 """
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -31,6 +33,19 @@ def generate_launch_description():
     speed = LaunchConfiguration("speed")
     height = LaunchConfiguration("height")
     radius = LaunchConfiguration("radius")
+    target_center_x = LaunchConfiguration("target_center_x")
+    target_center_y = LaunchConfiguration("target_center_y")
+    desired_depth = LaunchConfiguration("desired_depth")
+    use_sim_time = LaunchConfiguration("use_sim_time")
+    use_foxglove = LaunchConfiguration("use_foxglove")
+    allocation_ratio_param = ParameterValue(allocation_ratio, value_type=float)
+    speed_param = ParameterValue(speed, value_type=float)
+    height_param = ParameterValue(height, value_type=float)
+    radius_param = ParameterValue(radius, value_type=float)
+    target_center_x_param = ParameterValue(target_center_x, value_type=float)
+    target_center_y_param = ParameterValue(target_center_y, value_type=float)
+    desired_depth_param = ParameterValue(desired_depth, value_type=float)
+    use_sim_time_param = ParameterValue(use_sim_time, value_type=bool)
 
     sim_share = FindPackageShare("simulation_pkg")
     servo_share = FindPackageShare("servo_control_pkg")
@@ -63,6 +78,7 @@ def generate_launch_description():
         executable="camera_simulator.py",
         name="camera_simulator",
         output="screen",
+        parameters=[{"use_sim_time": use_sim_time_param}],
     )
 
     # 目标仿真器：直出 3D 位姿 TargetArray（绕过感知管线）
@@ -74,11 +90,14 @@ def generate_launch_description():
         name="target_simulator",
         output="screen",
         parameters=[{
+            "use_sim_time": use_sim_time_param,
             "publish_target_array": True,
             "trajectory": trajectory,
-            "speed": speed,
-            "height": height,
-            "radius": radius,
+            "speed": speed_param,
+            "height": height_param,
+            "radius": radius_param,
+            "center_x": target_center_x_param,
+            "center_y": target_center_y_param,
             "world_frame": "odom",
             "camera_frame": "camera_optical_link",
         }],
@@ -94,8 +113,10 @@ def generate_launch_description():
             PathJoinSubstitution([servo_config, controller_params_file]),
             PathJoinSubstitution([servo_config, "allocator_params.yaml"]),
             {"controller_plugin": controller_plugin,
-             "allocation_ratio": allocation_ratio,
+             "allocation_ratio": allocation_ratio_param,
              "auto_start": True,
+             "use_sim_time": use_sim_time_param,
+             "desired_depth": desired_depth_param,
              "publish_unstamped_cmd_vel": True},
         ],
         remappings=[
@@ -113,7 +134,8 @@ def generate_launch_description():
         name="gimbal_driver",
         output="screen",
         parameters=[PathJoinSubstitution([platform_config, "gimbal_params.yaml"]),
-                    {"use_sim": True}],
+                    {"use_sim": True,
+                     "use_sim_time": use_sim_time_param}],
     )
 
     # 平台管理：订阅 Gazebo 发布的 /odom 和 /imu/data，
@@ -123,11 +145,21 @@ def generate_launch_description():
         executable="platform_manager_node",
         name="platform_manager",
         output="screen",
+        parameters=[{"use_sim_time": use_sim_time_param}],
+    )
+
+    foxglove_bridge = Node(
+        package="foxglove_bridge",
+        executable="foxglove_bridge",
+        name="foxglove_bridge",
+        output="screen",
+        parameters=[{"port": 8765, "max_qos_depth": 10}],
+        condition=IfCondition(use_foxglove),
     )
 
     fcr_nodes = [
         camera_sim, target_sim, servo_manager,
-        gimbal_driver, platform_mgr,
+        gimbal_driver, platform_mgr, foxglove_bridge,
     ]
 
     return LaunchDescription([
@@ -136,14 +168,24 @@ def generate_launch_description():
                               description="控制器插件: IBVSController, PBVSController"),
         DeclareLaunchArgument("allocation_ratio", default_value="0.5",
                               description="控制分配比例 (0=纯云台, 1=纯底盘)"),
-        DeclareLaunchArgument("trajectory", default_value="circle",
+        DeclareLaunchArgument("trajectory", default_value="figure8",
                               description="目标轨迹类型: circle, line, figure8"),
         DeclareLaunchArgument("speed", default_value="0.3",
                               description="轨迹速度"),
         DeclareLaunchArgument("height", default_value="0.35",
                               description="目标高度 (m)"),
-        DeclareLaunchArgument("radius", default_value="1.0",
+        DeclareLaunchArgument("radius", default_value="0.8",
                               description="轨迹半径 (m)"),
+        DeclareLaunchArgument("target_center_x", default_value="3.0",
+                              description="目标轨迹中心的 odom X 坐标 (m)"),
+        DeclareLaunchArgument("target_center_y", default_value="0.0",
+                              description="目标轨迹中心的 odom Y 坐标 (m)"),
+        DeclareLaunchArgument("desired_depth", default_value="2.0",
+                              description="机器人跟随目标时保持的相机前向距离 (m)"),
+        DeclareLaunchArgument("use_sim_time", default_value="true",
+                              description="仿真节点是否使用 /clock 时间"),
+        DeclareLaunchArgument("use_foxglove", default_value="false",
+                              description="是否启动 Foxglove WebSocket 桥接"),
 
         # 阶段 1：Gazebo + RViz
         gazebo_launch,

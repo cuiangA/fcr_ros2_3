@@ -216,18 +216,25 @@ class SimpleRobotSim(Node):
         image_height = float(self.get_parameter("image_height").value)
         half_fov = math.radians(float(self.get_parameter("horizontal_fov_deg").value)) * 0.5
 
-        dx = target_x - self.robot_x
-        dy = target_y - self.robot_y
-        cos_yaw = math.cos(self.robot_yaw)
-        sin_yaw = math.sin(self.robot_yaw)
-        xb = cos_yaw * dx + sin_yaw * dy
-        yb = -sin_yaw * dx + cos_yaw * dy
+        camera_yaw = self.robot_yaw + self.gimbal_yaw
+        camera_x = self.robot_x + 0.15 * math.cos(camera_yaw)
+        camera_y = self.robot_y + 0.15 * math.sin(camera_yaw)
 
-        bearing = math.atan2(yb, xb)
-        image_angle = wrap_pi(self.gimbal_yaw - bearing)
-        ex = image_angle / half_fov if half_fov > 1e-6 else 0.0
-        depth = math.hypot(xb, yb)
-        valid = xb > 0.05 and abs(ex) <= 1.0
+        dx = target_x - camera_x
+        dy = target_y - camera_y
+        cos_yaw = math.cos(camera_yaw)
+        sin_yaw = math.sin(camera_yaw)
+        forward = cos_yaw * dx + sin_yaw * dy
+        left = -sin_yaw * dx + cos_yaw * dy
+
+        optical_x = -left
+        optical_z = forward
+        if half_fov > 1e-6 and optical_z > 1e-6:
+            ex = (optical_x / optical_z) / math.tan(half_fov)
+        else:
+            ex = 0.0
+        depth = optical_z
+        valid = optical_z > 0.05 and abs(ex) <= 1.0
 
         cx = 0.5 * image_width + ex * 0.5 * image_width
         cy = 0.5 * image_height
@@ -238,8 +245,8 @@ class SimpleRobotSim(Node):
             "cy": cy,
             "ex": ex,
             "depth": depth,
-            "xb": xb,
-            "yb": yb,
+            "optical_x": optical_x,
+            "optical_z": optical_z,
             "target_x": target_x,
             "target_y": target_y,
         }
@@ -277,7 +284,7 @@ class SimpleRobotSim(Node):
         target.width = float(target.bbox[2] - target.bbox[0])
         target.height = float(target.bbox[3] - target.bbox[1])
         target.confidence = 1.0
-        target.position = [float(observation["ex"] * depth), 0.0, float(depth)]
+        target.position = [float(observation["optical_x"]), 0.0, float(depth)]
         target.velocity = [0.0, 0.0, 0.0]
         target.depth_confidence = 1.0
 
