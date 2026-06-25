@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <!-- LEKIWI Full Robot: base + gimbal + sensors -->
 <robot name="lekiwi_fcr" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:arg name="enable_depth_camera" default="false"/>
 
   <!-- Include sub-models -->
   <xacro:include filename="lekiwi_base.xacro"/>
@@ -14,7 +15,7 @@
   <xacro:lekiwi_gimbal parent="base_link" prefix=""/>
 
   <!-- Instantiate sensors -->
-  <xacro:lekiwi_sensors parent="base_link" prefix=""/>
+  <xacro:lekiwi_sensors parent="base_link" prefix="" enable_depth_camera="$(arg enable_depth_camera)"/>
 
   <!-- Gazebo plugin: joint state publisher (TF + RViz updates for all joints) -->
   <gazebo>

@@ -24,20 +24,21 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     pkg_share = FindPackageShare("simulation_pkg")
     world_file = LaunchConfiguration("world")
+    enable_depth_camera = LaunchConfiguration("enable_depth_camera")
 
     # ── Gazebo 服务端 ─────────────────────────────────────────────
     # 用 bash -c 包装：先杀残留再启动，保证端口不冲突。
     # $0 = world_file 路径，由 LaunchConfiguration 在运行时替换
     # libgazebo_ros_init.so:  初始化 ROS API 节点
-    # libgazebo_ros_state.so: 提供 /gazebo/set_entity_state 等状态话题
     # libgazebo_ros_factory.so: 提供 spawn_entity 服务
+    use_sim_time = LaunchConfiguration("use_sim_time")
+    use_sim_time_param = ParameterValue(use_sim_time, value_type=bool)
     gazebo_server = ExecuteProcess(
         cmd=["bash", "-c",
              "pkill -9 gzserver gzclient 2>/dev/null || true; "
              "sleep 1; "
              "exec gzserver --verbose "
              "-s libgazebo_ros_init.so "
-             "-s libgazebo_ros_state.so "
              "-s libgazebo_ros_factory.so "
              "$0",
              world_file],
@@ -59,10 +60,11 @@ def generate_launch_description():
         parameters=[{
             "robot_description": ParameterValue(
                 Command([
-                    "xacro ", PathJoinSubstitution([pkg_share, "urdf", "lekiwi_full.urdf.xacro"])
+                    "xacro ", PathJoinSubstitution([pkg_share, "urdf", "lekiwi_full.urdf.xacro"]),
+                    " enable_depth_camera:=", enable_depth_camera,
                 ]), value_type=str
             ),
-            "use_sim_time": True,
+            "use_sim_time": use_sim_time_param,
         }],
     )
 
@@ -76,14 +78,19 @@ def generate_launch_description():
             "-entity", "lekiwi_fcr",
             "-x", "0", "-y", "0", "-z", "0.15",
         ],
+        parameters=[{"use_sim_time": use_sim_time_param}],
     )
 
     return LaunchDescription([
         DeclareLaunchArgument("world", default_value=PathJoinSubstitution(
             [pkg_share, "worlds", "fcr_world.world"]),
             description="Gazebo 世界文件路径"),
-        DeclareLaunchArgument("gui", default_value="true",
+        DeclareLaunchArgument("gui", default_value="false",
                               description="是否启动 Gazebo GUI"),
+        DeclareLaunchArgument("use_sim_time", default_value="true",
+                              description="Gazebo 相关 ROS 节点是否使用 /clock 时间"),
+        DeclareLaunchArgument("enable_depth_camera", default_value="false",
+                              description="是否启用 Gazebo 深度相机传感器"),
         gazebo_server, gazebo_client,
         robot_state_pub, spawn_robot,
     ])

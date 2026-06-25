@@ -14,6 +14,7 @@ ROS2 控制层负责：目标生成、视觉伺服、平台状态聚合
 用法：
   ros2 launch bringup_pkg fcr_sim_bringup.launch.py
   ros2 launch bringup_pkg fcr_sim_bringup.launch.py trajectory:=figure8 use_foxglove:=true
+  ros2 launch bringup_pkg fcr_sim_bringup.launch.py use_rviz:=true use_gazebo_gui:=true
 """
 
 from launch import LaunchDescription
@@ -37,7 +38,11 @@ def generate_launch_description():
     target_center_y = LaunchConfiguration("target_center_y")
     desired_depth = LaunchConfiguration("desired_depth")
     use_sim_time = LaunchConfiguration("use_sim_time")
+    use_rviz = LaunchConfiguration("use_rviz")
+    use_gazebo_gui = LaunchConfiguration("use_gazebo_gui")
+    enable_depth_camera = LaunchConfiguration("enable_depth_camera")
     use_foxglove = LaunchConfiguration("use_foxglove")
+    foxglove_port = LaunchConfiguration("foxglove_port")
     allocation_ratio_param = ParameterValue(allocation_ratio, value_type=float)
     speed_param = ParameterValue(speed, value_type=float)
     height_param = ParameterValue(height, value_type=float)
@@ -45,6 +50,7 @@ def generate_launch_description():
     target_center_x_param = ParameterValue(target_center_x, value_type=float)
     target_center_y_param = ParameterValue(target_center_y, value_type=float)
     desired_depth_param = ParameterValue(desired_depth, value_type=float)
+    foxglove_port_param = ParameterValue(foxglove_port, value_type=int)
     use_sim_time_param = ParameterValue(use_sim_time, value_type=bool)
 
     sim_share = FindPackageShare("simulation_pkg")
@@ -62,9 +68,15 @@ def generate_launch_description():
     # Gazebo 加载世界、生成机器人模型，URDF 内置的 planar_move / IMU / 深度相机插件自动启动
     gazebo_launch = IncludeLaunchDescription(
         PathJoinSubstitution([sim_share, "launch", "gazebo.launch.py"]),
+        launch_arguments={
+            "gui": use_gazebo_gui,
+            "use_sim_time": use_sim_time,
+            "enable_depth_camera": enable_depth_camera,
+        }.items(),
     )
     rviz_launch = IncludeLaunchDescription(
         PathJoinSubstitution([sim_share, "launch", "rviz.launch.py"]),
+        condition=IfCondition(use_rviz),
     )
 
     # ── 阶段 2（t=5s）：FCR 控制链 ────────────────────────────────
@@ -153,7 +165,7 @@ def generate_launch_description():
         executable="foxglove_bridge",
         name="foxglove_bridge",
         output="screen",
-        parameters=[{"port": 8765, "max_qos_depth": 10}],
+        parameters=[{"port": foxglove_port_param, "max_qos_depth": 10}],
         condition=IfCondition(use_foxglove),
     )
 
@@ -184,10 +196,18 @@ def generate_launch_description():
                               description="机器人跟随目标时保持的相机前向距离 (m)"),
         DeclareLaunchArgument("use_sim_time", default_value="true",
                               description="仿真节点是否使用 /clock 时间"),
+        DeclareLaunchArgument("use_rviz", default_value="false",
+                              description="是否启动 RViz2"),
+        DeclareLaunchArgument("use_gazebo_gui", default_value="false",
+                              description="是否启动 Gazebo GUI 客户端"),
+        DeclareLaunchArgument("enable_depth_camera", default_value="false",
+                              description="是否启用 Gazebo 深度相机传感器"),
         DeclareLaunchArgument("use_foxglove", default_value="false",
                               description="是否启动 Foxglove WebSocket 桥接"),
+        DeclareLaunchArgument("foxglove_port", default_value="8766",
+                              description="Foxglove WebSocket 端口，8765 被占用时可改"),
 
-        # 阶段 1：Gazebo + RViz
+        # 阶段 1：Gazebo + 可选 RViz
         gazebo_launch,
         rviz_launch,
 
