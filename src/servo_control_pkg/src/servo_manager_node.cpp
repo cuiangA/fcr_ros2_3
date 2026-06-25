@@ -132,6 +132,8 @@ public:
     this->declare_parameter("gimbal_pitch_limit", M_PI_2);   // 云台俯仰限位 (rad)
     this->declare_parameter("chassis_linear_limit", 1.0);    // 底盘线速度上限 (m/s)
     this->declare_parameter("chassis_angular_limit", 2.0);   // 底盘角速度上限 (rad/s)
+    this->declare_parameter("unwind_gain", 0.3);             // 底盘回中增益 (追云台偏角)
+    this->declare_parameter("smoothing_alpha", 0.7);         // 云台指令平滑 (0-1, ↑快)
     this->declare_parameter("auto_start", false);            // 是否自动开始伺服
     this->declare_parameter("target_timeout", 0.5);          // 目标丢失判定超时 (s)
     this->declare_parameter("publish_unstamped_cmd_vel", false);  // 仿真兼容：发布无时间戳 Twist
@@ -187,7 +189,9 @@ public:
       this->get_parameter("gimbal_pitch_limit").as_double(),
       this->get_parameter("chassis_linear_limit").as_double(),
       this->get_parameter("chassis_angular_limit").as_double(),
-      this->get_parameter("allocation_ratio").as_double()
+      this->get_parameter("allocation_ratio").as_double(),
+      this->get_parameter("unwind_gain").as_double(),
+      this->get_parameter("smoothing_alpha").as_double()
     );
 
     // ═══════════════════════════════════════════════════════════════════════

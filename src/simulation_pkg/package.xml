@@ -1,40 +1,14 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <!--
-  @file package.xml
-  @brief simulation_pkg 包清单文件。
-
-  该包属于纯资源/启动文件包，不包含编译目标。主要职责：
-    - 提供 LEKIWI 底盘的 URDF 模型（支持 xacro 宏展开）
-    - 提供 Gazebo 仿真世界文件（fcr_world.world）
-    - 提供 RViz 可视化启动配置
-    - 提供仿真相机/目标轨迹生成脚本
-    - 提供 Gazebo、RViz、机器人模型生成的 launch 启动文件
-
-  由于无编译目标，buildtool_depend 仅需 ament_cmake。
-  所有运行时依赖均声明为 exec_depend。
-  -->
-
   <name>simulation_pkg</name>
-  <version>0.1.0</version>
-  <description>LEKIWI 底盘仿真包：包含 Gazebo 仿真环境、URDF 模型、RViz 配置和机器人模型生成</description>
+  <version>0.2.0</version>
+  <description>FCR 协同控制仿真：虚拟感知+执行层，对接真实 servo_manager 伺服链路，Foxglove 可视化</description>
   <maintainer email="dev@fcr-project.org">FCR Dev Team</maintainer>
   <license>Apache-2.0</license>
 
-  <!-- 构建依赖：ament_cmake + gimbal_controller_plugin 编译所需库 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <build_depend>gazebo_dev</build_depend>
-  <build_depend>gazebo_ros</build_depend>
-  <build_depend>rclcpp</build_depend>
-  <build_depend>vision_servo_msgs</build_depend>
 
-  <!-- 运行时依赖：仿真环境、URDF 处理、状态发布和可视化所需的 ROS2 包 -->
-  <exec_depend>gazebo_ros_pkgs</exec_depend>
-  <exec_depend>xacro</exec_depend>
-  <exec_depend>robot_state_publisher</exec_depend>
-  <exec_depend>joint_state_publisher</exec_depend>
-  <exec_depend>rviz2</exec_depend>
   <exec_depend>vision_servo_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
@@ -42,13 +16,8 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>cv_bridge</exec_depend>
-  <exec_depend>python3-opencv</exec_depend>
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>gazebo_msgs</exec_depend>
 
   <export>
-    <!-- 声明构建类型为 ament_cmake，确保 colcon 使用正确的构建后端 -->
     <build_type>ament_cmake</build_type>
   </export>
 </package>

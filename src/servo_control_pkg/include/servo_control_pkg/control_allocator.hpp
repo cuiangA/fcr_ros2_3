@@ -63,7 +63,8 @@ public:
    */
   void configure(double gimbal_yaw_limit, double gimbal_pitch_limit,
                  double chassis_linear_limit, double chassis_angular_limit,
-                 double allocation_ratio);
+                 double allocation_ratio, double unwind_gain = 0.3,
+                 double smoothing_alpha = 0.7);
 
   /**
    * @brief 执行控制分配。
@@ -83,6 +84,7 @@ private:
   double gimbal_yaw_limit_, gimbal_pitch_limit_;    ///< 云台限位
   double chassis_linear_limit_, chassis_angular_limit_; ///< 底盘限位
   double allocation_ratio_;           ///< 分配比例 (0~1)
+  double unwind_gain_;               ///< 底盘回中增益（追云台偏角）
 
   // ── 平滑滤波器 ──────────────────────────────────────────────────
   double prev_gimbal_yaw_, prev_gimbal_pitch_;  ///< 上一帧云台指令（用于平滑）

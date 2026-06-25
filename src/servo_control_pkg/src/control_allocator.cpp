@@ -30,20 +30,23 @@ ControlAllocator::ControlAllocator()
   : strategy_(AllocationStrategy::PRIORITY),
     gimbal_yaw_limit_(M_PI), gimbal_pitch_limit_(M_PI_2),
     chassis_linear_limit_(1.0), chassis_angular_limit_(2.0),
-    allocation_ratio_(0.5), prev_gimbal_yaw_(0), prev_gimbal_pitch_(0),
+    allocation_ratio_(0.5), unwind_gain_(0.3),
+    prev_gimbal_yaw_(0), prev_gimbal_pitch_(0),
     smoothing_alpha_(0.3)
 {}
 
 void ControlAllocator::configure(
     double gimbal_yaw_limit, double gimbal_pitch_limit,
     double chassis_linear_limit, double chassis_angular_limit,
-    double allocation_ratio) {
+    double allocation_ratio, double unwind_gain,
+    double smoothing_alpha) {
   gimbal_yaw_limit_ = gimbal_yaw_limit;
   gimbal_pitch_limit_ = gimbal_pitch_limit;
   chassis_linear_limit_ = chassis_linear_limit;
   chassis_angular_limit_ = chassis_angular_limit;
-  // 钳位 allocation_ratio 到 [0, 1]
   allocation_ratio_ = std::clamp(allocation_ratio, 0.0, 1.0);
+  unwind_gain_ = std::max(0.0, unwind_gain);
+  smoothing_alpha_ = std::clamp(smoothing_alpha, 0.0, 1.0);
 }
 
 ControlAllocation ControlAllocator::allocate(
@@ -107,9 +110,11 @@ ControlAllocation ControlAllocator::allocate(
                                      -gimbal_pitch_limit_, gimbal_pitch_limit_);
 
   // 底盘取剩余的偏航旋转分量（云台限位不足时由底盘转动补足）
+  // + unwind_gain_ × gimbal_yaw：收敛后底盘持续回中云台
   double chassis_yaw_component = yaw_rate * (allocation_ratio_ + yaw_saturation * (1.0 - allocation_ratio_));
-  cmd.chassis_twist.angular.z = std::clamp(chassis_yaw_component,
-                                           -chassis_angular_limit_, chassis_angular_limit_);
+  cmd.chassis_twist.angular.z = std::clamp(
+      chassis_yaw_component + unwind_gain_ * gimbal_yaw,
+      -chassis_angular_limit_, chassis_angular_limit_);
 
   // ── 平移分配：全部由底盘执行 ────────────────────────────────────
   // camera_velocity(1) 是相机垂向平移，平面底盘无法执行，当前 MVP 忽略。

@@ -7,6 +7,8 @@ servo_manager:
     gimbal_pitch_limit: 1.5708   # 云台俯仰角限位 (rad)，±π/2
     chassis_linear_limit: 1.0    # 底盘线速度限制 (m/s)
     chassis_angular_limit: 2.0   # 底盘角速度限制 (rad/s)
+    unwind_gain: 0.3             # 底盘回中增益（追云台偏角，0=不回中）
+    smoothing_alpha: 0.8         # 云台指令平滑（0-1, ↑快, 80%新+20%旧）
     controller_plugin: "servo_control_pkg::IBVSController"  # 默认控制器插件
     auto_start: false            # false = 通过 VisualServo Action 启动闭环；仿真可覆盖为 true
     target_timeout: 0.5          # 目标超时 (s)，超时后发布零指令
