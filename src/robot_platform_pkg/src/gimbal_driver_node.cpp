@@ -14,6 +14,7 @@
 #include "robot_platform_pkg/hardware_interfaces/gimbal_interface.hpp"
 #include "robot_platform_pkg/utils/can_utils.hpp"
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
 #include <stdexcept>
 
@@ -29,10 +30,15 @@ public:
     this->declare_parameter("can_interface", "can0");
     // CAN ID 默认使用 DJI RS2 协议的标准地址 0x201
     this->declare_parameter("can_id", static_cast<int>(DJIRS2Protocol::DEFAULT_CAN_ID));
+    this->declare_parameter("enable_command_timeout", true);
+    this->declare_parameter("command_timeout_sec", 0.5);
 
     bool use_sim = this->get_parameter("use_sim").as_bool();
     std::string can_if = this->get_parameter("can_interface").as_string();
     int can_id = this->get_parameter("can_id").as_int();
+    enable_command_timeout_ = this->get_parameter("enable_command_timeout").as_bool();
+    command_timeout_sec_ = this->get_parameter("command_timeout_sec").as_double();
+    last_cmd_time_ = this->now();
 
     // ── 2. 创建云台硬件接口（真实或仿真） ──────────────────────────
     if (use_sim) {
@@ -56,6 +62,9 @@ public:
       "/cmd_gimbal", reliable_qos,
       std::bind(&GimbalDriverNode::cmd_callback, this, std::placeholders::_1));
 
+    joint_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(
+      "/joint_states", reliable_qos);
+
     // 状态读取定时器：100 Hz（云台需要高频反馈以保证伺服精度）
     state_timer_ = this->create_wall_timer(
       std::chrono::milliseconds(10),
@@ -64,22 +73,75 @@ public:
     RCLCPP_INFO(get_logger(), "云台驱动已启动 (sim=%d)", use_sim);
   }
 
+  ~GimbalDriverNode() override {
+    if (gimbal_) {
+      send_stop_command();
+      gimbal_->shutdown();
+    }
+  }
+
 private:
   /// 云台指令回调 — 直接转发给硬件接口
   void cmd_callback(const vision_servo_msgs::msg::GimbalCmd::ConstSharedPtr& msg) {
+    last_cmd_time_ = this->now();
+    has_active_cmd_ = true;
     gimbal_->sendCommand(*msg);
   }
 
   /// 状态读取回调（100 Hz） — 从云台读取角度和角速度
   void publish_state() {
+    enforce_command_timeout();
+
     float yaw, pitch, yaw_rate, pitch_rate;
     gimbal_->readState(yaw, pitch, yaw_rate, pitch_rate);
-    // TODO：将云台状态发布为 PlatformState 或专用话题
+
+    auto joint_state = sensor_msgs::msg::JointState();
+    joint_state.header.stamp = this->now();
+    joint_state.name = {"gimbal_yaw_joint", "gimbal_pitch_joint"};
+    joint_state.position = {static_cast<double>(yaw), static_cast<double>(pitch)};
+    joint_state.velocity = {static_cast<double>(yaw_rate), static_cast<double>(pitch_rate)};
+    joint_state_pub_->publish(joint_state);
+
+    // TODO：真实 DJI RS2 接入后，应把 SDK 连接状态/错误码也发布到诊断话题。
+  }
+
+  void enforce_command_timeout() {
+    if (!enable_command_timeout_ || !has_active_cmd_) {
+      return;
+    }
+    const double elapsed = (this->now() - last_cmd_time_).seconds();
+    if (elapsed <= command_timeout_sec_) {
+      return;
+    }
+    send_stop_command();
+    has_active_cmd_ = false;
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "云台命令超时 %.3fs，已发送停止命令", elapsed);
+  }
+
+  void send_stop_command() {
+    if (!gimbal_) {
+      return;
+    }
+    auto stop = vision_servo_msgs::msg::GimbalCmd();
+    stop.header.stamp = this->now();
+    stop.header.frame_id = "gimbal_link";
+    stop.yaw_rate = 0.0f;
+    stop.pitch_rate = 0.0f;
+    stop.hold_yaw = true;
+    stop.hold_pitch = true;
+    gimbal_->sendCommand(stop);
   }
 
   std::unique_ptr<IGimbalInterface> gimbal_;  ///< 云台硬件接口
   rclcpp::Subscription<vision_servo_msgs::msg::GimbalCmd>::SharedPtr cmd_sub_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
   rclcpp::TimerBase::SharedPtr state_timer_;   ///< 100 Hz 状态读取定时器
+  rclcpp::Time last_cmd_time_{0, 0, RCL_ROS_TIME};
+  double command_timeout_sec_ = 0.5;
+  bool enable_command_timeout_ = true;
+  bool has_active_cmd_ = false;
 };
 
 }  // namespace robot_platform_pkg

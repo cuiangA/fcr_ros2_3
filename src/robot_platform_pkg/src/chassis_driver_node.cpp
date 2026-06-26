@@ -6,7 +6,7 @@
  *   1. 订阅 /cmd_vel (TwistStamped)，接收上层控制指令
  *   2. 对速度指令进行安全限幅（钳位到 max_linear/angular_velocity）
  *   3. 通过 IChassisInterface 将指令发送给底层硬件
- *   4. 以 50 Hz 频率发布里程计（/odom）和 TF 变换
+ *   4. 以 50 Hz 频率发布底盘原始反馈（/chassis/odom_raw）
  *
  * 安全机制：
  *   - 速度钳位：防止超速飞车
@@ -22,7 +22,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <tf2_ros/transform_broadcaster.h>
 #include <memory>
 #include <stdexcept>
 
@@ -77,12 +76,9 @@ public:
       "/cmd_vel", reliable_qos,
       std::bind(&ChassisDriverNode::cmd_vel_callback, this, std::placeholders::_1));
 
-    // 发布里程计（RELIABLE QoS）
-    odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>(
-      "/odom", rclcpp::QoS(10).reliable());
-
-    // TF 广播器（将 odom → base_link 变换发布到 TF 树）
-    tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+    // 发布底盘原始反馈。/odom 与 TF 由 odometry_node 统一发布。
+    raw_odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>(
+      "/chassis/odom_raw", rclcpp::QoS(10).reliable());
 
     // ── 5. 状态发布定时器（50 Hz = 20ms 间隔） ────────────────────
     state_timer_ = this->create_wall_timer(
@@ -118,25 +114,15 @@ private:
   /**
    * @brief 状态发布定时器回调（50 Hz）。
    *
-   * 从底盘硬件读取里程计数据，填充时间戳和坐标系信息，
-   * 同时发布 /odom 话题和 TF 变换。
+   * 从底盘硬件读取原始里程计/速度反馈，填充时间戳和坐标系信息后发布。
+   * 注意：该节点不发布 /odom 和 TF，避免与融合里程计节点产生双源冲突。
    */
   void publish_state() {
-    auto odom = chassis_->readOdometry();   // 从硬件读取当前里程计
-    odom.header.stamp = this->now();         // ROS 时间戳
-    odom.header.frame_id = "odom";           // 全局参考坐标系
-    odom.child_frame_id = "base_link";       // 机器人本体坐标系
-    odom_pub_->publish(odom);
-
-    // 广播 TF：odom → base_link
-    geometry_msgs::msg::TransformStamped tf;
-    tf.header = odom.header;
-    tf.child_frame_id = odom.child_frame_id;
-    tf.transform.translation.x = odom.pose.pose.position.x;
-    tf.transform.translation.y = odom.pose.pose.position.y;
-    tf.transform.translation.z = 0.0;
-    tf.transform.rotation = odom.pose.pose.orientation;
-    tf_broadcaster_->sendTransform(tf);
+    auto raw_odom = chassis_->readOdometry();
+    raw_odom.header.stamp = this->now();
+    raw_odom.header.frame_id = "chassis_odom";
+    raw_odom.child_frame_id = "base_link";
+    raw_odom_pub_->publish(raw_odom);
   }
 
   // ── 硬件接口与运动学 ────────────────────────────────────────────
@@ -145,8 +131,7 @@ private:
 
   // ── ROS2 通信 ────────────────────────────────────────────────────
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_sub_;
-  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
-  std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr raw_odom_pub_;
   rclcpp::TimerBase::SharedPtr state_timer_;
 
   // ── 安全限制 ────────────────────────────────────────────────────

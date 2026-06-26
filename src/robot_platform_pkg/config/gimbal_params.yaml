@@ -5,3 +5,5 @@ gimbal_driver:
     use_sim: false            # true = 仿真模式，无需 CAN 硬件
     can_interface: "can0"     # CAN 接口名称（Linux SocketCAN 接口）
     can_id: 513               # CAN 帧 ID（0x201 = DJI RS2 默认地址）
+    enable_command_timeout: true
+    command_timeout_sec: 0.5

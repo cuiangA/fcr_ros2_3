@@ -15,17 +15,22 @@ public:
   OmniWheelOdometry() : x_(0), y_(0), yaw_(0) {}
 
   nav_msgs::msg::Odometry update(
-      const geometry_msgs::msg::Twist& cmd_vel,
+      const nav_msgs::msg::Odometry& chassis_odom_raw,
       const sensor_msgs::msg::Imu& imu,
       double dt) override {
-    // 航位推算：dx = v * dt, dy = v * dt（全向底盘可独立产生各方向速度）
+    // 航位推算：使用底盘原始反馈中的速度，而不是直接使用上层 /cmd_vel。
     // 使用 IMU 的偏航角作为朝向参考
-    double vx = cmd_vel.linear.x * dt;
-    double vy = cmd_vel.linear.y * dt;
+    const auto& chassis_twist = chassis_odom_raw.twist.twist;
+    double vx = chassis_twist.linear.x * dt;
+    double vy = chassis_twist.linear.y * dt;
 
     // 从 IMU 四元数提取偏航角
     double qw = imu.orientation.w, qx = imu.orientation.x;
     double qy = imu.orientation.y, qz = imu.orientation.z;
+    if (std::abs(qw) + std::abs(qx) + std::abs(qy) + std::abs(qz) < 1e-6) {
+      qw = 1.0;
+      qx = qy = qz = 0.0;
+    }
     yaw_ = std::atan2(2 * (qw * qz + qx * qy),
                       1 - 2 * (qy * qy + qz * qz));
 
@@ -39,7 +44,11 @@ public:
     odom.pose.pose.position.y = y_;
     odom.pose.pose.position.z = 0.0;
     odom.pose.pose.orientation = imu.orientation;
-    odom.twist.twist = cmd_vel;
+    if (std::abs(imu.orientation.w) + std::abs(imu.orientation.x) +
+        std::abs(imu.orientation.y) + std::abs(imu.orientation.z) < 1e-6) {
+      odom.pose.pose.orientation.w = 1.0;
+    }
+    odom.twist.twist = chassis_twist;
     return odom;
   }
 

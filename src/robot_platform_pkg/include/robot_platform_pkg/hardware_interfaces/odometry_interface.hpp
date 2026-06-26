@@ -3,14 +3,13 @@
  * @brief 里程计抽象接口 — 融合轮速和 IMU 航向估计机器人位姿。
  *
  * IOdometryInterface 定义了里程计计算的统一契约。
- * 输入为底盘速度指令和 IMU 方向数据，输出为 odom 坐标系下的机器人位姿。
+ * 输入为底盘原始里程计/速度反馈和 IMU 方向数据，输出为 odom 坐标系下的机器人位姿。
  * 使用航位推算（dead reckoning）：通过对速度积分计算位置变化。
  */
 
 #pragma once
 
 #include <nav_msgs/msg/odometry.hpp>
-#include <geometry_msgs/msg/twist.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <memory>
 
@@ -21,14 +20,14 @@ public:
   virtual ~IOdometryInterface() = default;
 
   /**
-   * @brief 根据轮速和 IMU 航向更新里程计估计。
-   * @param cmd_vel 底盘速度指令（用于航位推算）
-   * @param imu     IMU 数据（提供航向角 yaw）
-   * @param dt      时间间隔 (s)
+   * @brief 根据底盘原始反馈和 IMU 航向更新里程计估计。
+   * @param chassis_odom_raw 底盘原始里程计/速度反馈
+   * @param imu              IMU 数据（提供航向角 yaw）
+   * @param dt               时间间隔 (s)
    * @return 更新后的里程计消息
    */
   virtual nav_msgs::msg::Odometry update(
-    const geometry_msgs::msg::Twist& cmd_vel,
+    const nav_msgs::msg::Odometry& chassis_odom_raw,
     const sensor_msgs::msg::Imu& imu,
     double dt) = 0;
 

@@ -8,10 +8,10 @@
   - use_sim=true：         使用仿真后端，无需硬件
 
 节点列表：
-  - chassis_driver  — LEKIWI 三全向轮底盘驱动
+  - chassis_driver  — LEKIWI 三全向轮底盘驱动，发布 /chassis/odom_raw
   - gimbal_driver   — DJI RS2 云台驱动（CAN）
   - imu_driver      — BNO055 IMU 驱动（I2C）
-  - odometry        — 轮速 + IMU 融合里程计
+  - odometry        — /chassis/odom_raw + /imu/data 融合，统一发布 /odom 和 TF
   - platform_manager — 聚合所有平台状态为统一的 PlatformState 消息
 
 用法：

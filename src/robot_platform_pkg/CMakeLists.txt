@@ -4,7 +4,7 @@
 # 构建目标：
 #   1. platform_qos (INTERFACE 库)           — 统一 QoS 配置
 #   2. three_wheel_kinematics (INTERFACE 库)  — 三全向轮运动学
-#   3. chassis_driver_node                    — 底盘驱动（串口/仿真）
+#   3. chassis_driver_node                    — 底盘驱动（串口/仿真，发布底盘原始反馈）
 #   4. gimbal_driver_node                    — 云台驱动（CAN/仿真）
 #   5. imu_driver_node                       — IMU 驱动（I2C/仿真）
 #   6. odometry_node                         — 里程计融合（轮速+IMU）
@@ -51,13 +51,14 @@ target_link_libraries(three_wheel_kinematics INTERFACE Eigen3::Eigen)
 add_executable(chassis_driver_node src/chassis_driver_node.cpp src/chassis_interface_impl.cpp)
 target_include_directories(chassis_driver_node PRIVATE include)
 ament_target_dependencies(chassis_driver_node
-  rclcpp geometry_msgs sensor_msgs nav_msgs tf2_ros vision_servo_msgs
+  rclcpp geometry_msgs nav_msgs
 )
 target_link_libraries(chassis_driver_node three_wheel_kinematics platform_qos)
 install(TARGETS chassis_driver_node DESTINATION lib/${PROJECT_NAME})
 
 # ── 云台驱动节点 ──────────────────────────────────────────────────
-add_executable(gimbal_driver_node src/gimbal_driver_node.cpp src/gimbal_interface_impl.cpp)
+add_executable(gimbal_driver_node src/gimbal_driver_node.cpp src/gimbal_interface_impl.cpp
+  src/dji_rs2_protocol.cpp)
 target_include_directories(gimbal_driver_node PRIVATE include)
 ament_target_dependencies(gimbal_driver_node
   rclcpp vision_servo_msgs sensor_msgs

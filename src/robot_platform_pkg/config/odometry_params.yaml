@@ -7,3 +7,4 @@ odometry_node:
     odom_frame: "odom"           # 里程计坐标系（全局参考系）
     base_frame: "base_link"      # 机器人本体坐标系
     publish_rate: 50.0           # 里程计发布频率 (Hz)
+    chassis_odom_topic: "/chassis/odom_raw"  # 底盘驱动发布的原始里程计/速度反馈

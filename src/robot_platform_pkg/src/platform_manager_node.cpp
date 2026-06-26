@@ -90,9 +90,19 @@ private:
   void joint_state_callback(const sensor_msgs::msg::JointState::ConstSharedPtr& msg) {
     for (size_t i = 0; i < msg->name.size(); ++i) {
       if (msg->name[i] == "gimbal_yaw_joint") {
-        gimbal_yaw_ = msg->position[i];
+        if (i < msg->position.size()) {
+          gimbal_yaw_ = msg->position[i];
+        }
+        if (i < msg->velocity.size()) {
+          gimbal_yaw_rate_ = msg->velocity[i];
+        }
       } else if (msg->name[i] == "gimbal_pitch_joint") {
-        gimbal_pitch_ = msg->position[i];
+        if (i < msg->position.size()) {
+          gimbal_pitch_ = msg->position[i];
+        }
+        if (i < msg->velocity.size()) {
+          gimbal_pitch_rate_ = msg->velocity[i];
+        }
       }
     }
   }
@@ -129,8 +139,8 @@ private:
     // ── 云台状态（来自关节状态） ──────────────────────────────────
     state.gimbal_yaw = gimbal_yaw_;
     state.gimbal_pitch = gimbal_pitch_;
-    state.gimbal_yaw_rate = 0.0f;    // TODO: 从关节速度计算
-    state.gimbal_pitch_rate = 0.0f;  // TODO: 从关节速度计算
+    state.gimbal_yaw_rate = gimbal_yaw_rate_;
+    state.gimbal_pitch_rate = gimbal_pitch_rate_;
 
     // ── 子系统连接状态 ────────────────────────────────────────────
     // TODO：生产环境中通过心跳包检测各子系统的真实连接状态
@@ -154,6 +164,8 @@ private:
   double current_yaw_ = 0.0;            ///< 从里程计四元数提取的当前偏航角 (rad)
   double gimbal_yaw_ = 0.0;             ///< 云台偏航角 (rad)，来自 /joint_states
   double gimbal_pitch_ = 0.0;           ///< 云台俯仰角 (rad)，来自 /joint_states
+  double gimbal_yaw_rate_ = 0.0;        ///< 云台偏航角速度 (rad/s)，来自 /joint_states
+  double gimbal_pitch_rate_ = 0.0;      ///< 云台俯仰角速度 (rad/s)，来自 /joint_states
 };
 
 }  // namespace robot_platform_pkg

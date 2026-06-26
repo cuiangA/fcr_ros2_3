@@ -1,0 +1,15 @@
+keyboard_gimbal_teleop:
+  ros__parameters:
+    cmd_gimbal_topic: "/cmd_gimbal"
+    publish_rate_hz: 20.0
+    key_timeout_sec: 0.35
+    yaw_rate: 0.25
+    pitch_rate: 0.20
+    speed_scale: 1.0
+    speed_step: 0.25
+    min_speed_scale: 0.25
+    max_speed_scale: 3.0
+    yaw_direction_sign: 1.0
+    pitch_direction_sign: 1.0
+    hold_on_idle: true
+    frame_id: "gimbal_link"

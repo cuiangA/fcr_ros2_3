@@ -514,7 +514,7 @@ B 组给 vibe coder 的阅读提示词：
 | 底盘 driver 节点 | 框架完成 | 订阅 `/cmd_vel`，支持 `use_sim`；真实 LEKIWI 串口通信仍是 TODO |
 | 云台 driver 节点 | 框架完成 | 订阅 `/cmd_gimbal`，支持 `use_sim`；真实 DJI RS2 CAN 通信仍是 TODO |
 | IMU driver 节点 | 框架完成 | 发布 `/imu/data`，支持 `use_sim`；真实 BNO055 I2C 通信仍是 TODO |
-| 里程计节点 | 已完成/可运行 | 订阅 `/cmd_vel` 和 `/imu/data`，发布 `/odom` 和 TF |
+| 里程计节点 | 已完成/可运行 | 订阅 `/chassis/odom_raw` 和 `/imu/data`，统一发布 `/odom` 和 TF |
 | PlatformManager | 已完成/可运行 | 聚合 `/odom`、`/imu/data`、`/joint_states` 到 `/platform/state` |
 | 设备心跳/连接状态 | 待补齐 | 当前生产环境连接状态和部分云台速度仍有 TODO |
 

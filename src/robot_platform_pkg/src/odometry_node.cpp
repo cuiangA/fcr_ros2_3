@@ -3,7 +3,7 @@
  * @brief 里程计节点 — 融合轮速和 IMU 航向估计机器人位姿。
  *
  * 工作原理（航位推算 dead reckoning）：
- *   1. 接收底盘速度指令（/cmd_vel）和 IMU 数据（/imu/data）
+ *   1. 接收底盘原始反馈（/chassis/odom_raw）和 IMU 数据（/imu/data）
  *   2. 利用 IMU 的偏航角（yaw）确定当前朝向
  *   3. 对速度积分 dt 得到位移增量 Δx, Δy
  *   4. 累积位移更新全局位姿（x, y, yaw）
@@ -20,7 +20,6 @@
 #include "robot_platform_pkg/kinematics/three_wheel_omni_kinematics.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 
@@ -29,8 +28,7 @@ namespace robot_platform_pkg {
 class OdometryNode : public rclcpp::Node {
 public:
   explicit OdometryNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions())
-    : Node("odometry_node", options),
-      x_(0), y_(0), yaw_(0)  // 里程计原点初始化
+    : Node("odometry_node", options)
   {
     // ── 1. 声明参数 ────────────────────────────────────────────────
     this->declare_parameter("wheel_radius", 0.05);
@@ -38,6 +36,7 @@ public:
     this->declare_parameter("odom_frame", "odom");
     this->declare_parameter("base_frame", "base_link");
     this->declare_parameter("publish_rate", 50.0);
+    this->declare_parameter("chassis_odom_topic", "/chassis/odom_raw");
 
     double wr = this->get_parameter("wheel_radius").as_double();
     double br = this->get_parameter("base_radius").as_double();
@@ -46,10 +45,13 @@ public:
 
     double rate = this->get_parameter("publish_rate").as_double();
 
-    // ── 2. 订阅速度指令和 IMU 数据 ────────────────────────────────
-    cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
-      "/cmd_vel", rclcpp::QoS(10).reliable(),
-      std::bind(&OdometryNode::cmd_vel_callback, this, std::placeholders::_1));
+    const auto chassis_odom_topic =
+      this->get_parameter("chassis_odom_topic").as_string();
+
+    // ── 2. 订阅底盘原始反馈和 IMU 数据 ────────────────────────────
+    chassis_odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+      chassis_odom_topic, rclcpp::QoS(10).reliable(),
+      std::bind(&OdometryNode::chassis_odom_callback, this, std::placeholders::_1));
 
     // IMU 使用 SensorDataQoS (BEST_EFFORT)：允许偶尔丢帧，保证低延迟
     imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
@@ -69,13 +71,16 @@ public:
 
     last_time_ = this->now();  // 记录初始时刻用于 dt 计算
 
-    RCLCPP_INFO(get_logger(), "里程计节点已启动 (%.1fHz)", rate);
+    last_imu_.orientation.w = 1.0;
+
+    RCLCPP_INFO(get_logger(), "里程计节点已启动 (%.1fHz, chassis_odom=%s)",
+                rate, chassis_odom_topic.c_str());
   }
 
 private:
-  /// 缓存最新的速度指令
-  void cmd_vel_callback(const geometry_msgs::msg::TwistStamped::ConstSharedPtr& msg) {
-    last_cmd_vel_ = msg->twist;
+  /// 缓存最新的底盘原始里程计/速度反馈
+  void chassis_odom_callback(const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
+    last_chassis_odom_ = *msg;
   }
 
   /// 缓存最新的 IMU 数据
@@ -96,7 +101,7 @@ private:
     last_time_ = now;
 
     // 执行里程计更新（航位推算）
-    auto odom = odometry_->update(last_cmd_vel_, last_imu_, dt);
+    auto odom = odometry_->update(last_chassis_odom_, last_imu_, dt);
 
     // 填充时间戳和坐标系信息
     odom.header.stamp = now;
@@ -121,15 +126,14 @@ private:
   std::unique_ptr<IOdometryInterface> odometry_;
 
   // ── ROS2 通信 ────────────────────────────────────────────────────
-  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr chassis_odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 
   // ── 状态变量 ────────────────────────────────────────────────────
-  double x_, y_, yaw_;                         ///< 累积位姿（航位推算）
-  geometry_msgs::msg::Twist last_cmd_vel_;     ///< 最新速度指令缓存
+  nav_msgs::msg::Odometry last_chassis_odom_;  ///< 最新底盘原始反馈缓存
   sensor_msgs::msg::Imu last_imu_;             ///< 最新 IMU 数据缓存
   rclcpp::Time last_time_;                     ///< 上次更新时间
 };

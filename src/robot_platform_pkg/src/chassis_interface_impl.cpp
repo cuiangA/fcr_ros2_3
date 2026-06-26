@@ -17,23 +17,25 @@ public:
     return true;
   }
   void sendCommand(const geometry_msgs::msg::Twist& cmd) override {
-    (void)cmd;
-    // 仿真：不实际发送，仅更新内部状态
+    // 仿真：不实际发送，仅缓存最近一次命令，作为底盘原始速度反馈。
+    last_cmd_ = cmd;
   }
   nav_msgs::msg::Odometry readOdometry() override {
     nav_msgs::msg::Odometry odom;
-    // 仿真：返回零位姿
+    // 仿真：位姿由 odometry_node 统一积分，这里只提供底盘原始速度反馈。
     odom.pose.pose.position.x = 0.0;
     odom.pose.pose.position.y = 0.0;
-    odom.twist.twist.linear.x = 0.0;
-    odom.twist.twist.linear.y = 0.0;
-    odom.twist.twist.angular.z = 0.0;
+    odom.pose.pose.orientation.w = 1.0;
+    odom.twist.twist = last_cmd_;
     return odom;
   }
-  void emergencyStop() override {}
+  void emergencyStop() override { last_cmd_ = geometry_msgs::msg::Twist(); }
   void shutdown() override {}
   bool isConnected() const override { return true; }
   float readBatteryVoltage() override { return 24.0f; }
+
+private:
+  geometry_msgs::msg::Twist last_cmd_;
 };
 
 std::unique_ptr<IChassisInterface> make_lekiwi_chassis() {
