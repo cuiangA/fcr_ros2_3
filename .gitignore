@@ -23,3 +23,9 @@ build/*/test_results/
 # ROS bags
 *.db3
 *.mcap
+
+#zhou_mi_ignore
+##Perception doc
+perception_doc/
+##project_documentation.md
+project_documentation.md
