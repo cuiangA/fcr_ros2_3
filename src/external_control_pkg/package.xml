@@ -1,0 +1,68 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <!--
+  @file package.xml
+  @brief external_control_pkg 包清单文件。
+
+  外部控制包：语音唤醒 + 录音 + 云端 ASR + 指令发布。
+
+  核心功能由 C++ 节点实现，通过以下系统库与硬件/云端交互：
+    - PortAudio:     麦克风音频采集（支持 reSpeaker XVF3800 等 USB 设备）
+    - sherpa-onnx:   唤醒词检测（Keyword Spotting），ONNX 推理引擎
+    - libcurl:       HTTP POST 上传录音文件到云端 ASR 服务
+    - nlohmann-json: 解析云端返回的指令 JSON
+
+  编译时需预先安装：
+    sudo apt install portaudio19-dev libcurl4-openssl-dev nlohmann-json3-dev
+    pip3 install sherpa-onnx
+
+  模型文件下载：
+    wget https://github.com/k2-fsa/sherpa-onnx/releases/download/\
+  asr-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2
+    tar xvf sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2
+    mv sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01 models/
+  -->
+
+  <name>external_control_pkg</name>
+  <version>0.1.1</version>
+  <description>外部控制包：语音唤醒、录音、HTTP 云端 ASR 与指令发布（C++ 实现）</description>
+  <maintainer email="dev@fcr-project.org">FCR Dev Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- ── 构建工具 ───────────────────────────────────────────────── -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- ── ROS2 核心依赖 ─────────────────────────────────────────── -->
+  <!-- rclcpp: C++ ROS2 客户端库                                    -->
+  <!-- std_msgs: Header 等基础消息                                   -->
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+
+  <!-- ── rosidl 接口代码生成 ───────────────────────────────────── -->
+  <!-- 本包自定义 msg/VoiceCommand.msg                              -->
+  <build_depend>rosidl_default_generators</build_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <!-- ── 系统依赖（编译期，通过 apt 安装） ─────────────────────── -->
+  <!--
+    sudo apt install portaudio19-dev libcurl4-openssl-dev nlohmann-json3-dev
+
+    portaudio19-dev:    提供 libportaudio 头文件和 .so
+    libcurl4-openssl-dev: 提供 libcurl 头文件和 .so
+    nlohmann-json3-dev: 提供 header-only nlohmann/json.hpp
+  -->
+  <build_depend>libportaudio-dev</build_depend>
+  <build_depend>libcurl4-openssl-dev</build_depend>
+  <build_depend>nlohmann-json3-dev</build_depend>
+
+  <!--
+    sherpa-onnx: 通过 pip 安装，编译期自动查找 .so 和头文件
+      pip3 install sherpa-onnx
+  -->
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
