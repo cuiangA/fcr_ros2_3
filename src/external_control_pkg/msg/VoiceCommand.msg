@@ -7,7 +7,8 @@ std_msgs/Header header
 # ── 意图列表 ─────────────────────────────────────────────────
 # 可能同时包含多个意图（多指令场景）
 # 可选值: start_following, stop_following, emergency_stop,
-#         switch_target, distance_adjust, gimbal_home, status_query
+#         switch_target, distance_adjust, gimbal_home, status_query,
+#         gimbal_nudge_left, gimbal_nudge_right, gimbal_stop
 string[] intents
 
 # ── 各意图的置信度（与 intents 一一对应） ─────────────────────

@@ -38,6 +38,7 @@
   <!-- std_msgs: Header 等基础消息                                   -->
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
+  <depend>vision_servo_msgs</depend>     <!-- GimbalCmd 云台控制消息 -->
 
   <!-- ── rosidl 接口代码生成 ───────────────────────────────────── -->
   <!-- 本包自定义 msg/VoiceCommand.msg                              -->
