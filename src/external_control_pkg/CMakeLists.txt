@@ -51,6 +51,9 @@ find_library(SHERPA_ONNX_LIB
     /usr/lib
     $ENV{HOME}/.local/lib
   PATH_SUFFIXES
+    python3.10/site-packages/sherpa_onnx/lib
+    python3.11/site-packages/sherpa_onnx/lib
+    python3.12/site-packages/sherpa_onnx/lib
     _sherpa_onnx/lib
   NO_DEFAULT_PATH
 )
