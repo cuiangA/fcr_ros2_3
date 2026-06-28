@@ -55,12 +55,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "energy_threshold",
-            default_value="500",
+            default_value="500.0",
             description="麦克风能量阈值（低于此值视为静音）",
         ),
         DeclareLaunchArgument(
             "silence_timeout",
-            default_value="1.5",
+            default_value="5.0",
             description="静音超时判定时间（秒）",
         ),
         DeclareLaunchArgument(
