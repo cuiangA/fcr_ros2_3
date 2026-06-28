@@ -19,6 +19,7 @@
 #include "external_control_pkg/msg/voice_command.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <portaudio.h>
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -43,20 +44,20 @@ constexpr int kSampleRate = 16000;
 /// 每帧采样数（与模型 frame_length 对齐）
 constexpr int kChunkSize = 512;
 
-/// 静音超时（秒）
-constexpr double kSilenceTimeoutSec = 1.5;
+/// 静音超时（秒）：检测到声音后，连续静音这么久才结束录音
+constexpr double kSilenceTimeoutSec = 5.0;
 
 /// RMS 能量阈值（低于此值视为静音）
 constexpr float kEnergyThreshold = 500.0f;
 
-/// 最短录音时长（秒），防止噪音误触发
-constexpr double kMinRecordSec = 0.5;
+/// 最短录音时长（秒）：未录够这么久，不允许因静音而结束
+constexpr double kMinRecordSec = 5.0;
 
 /// 最长录音时长（秒），防止死循环
-constexpr double kMaxRecordSec = 10.0;
+constexpr double kMaxRecordSec = 20.0;
 
-/// 唤醒关键词
-constexpr const char *kWakeKeyword = "你好西西";
+/// 唤醒关键词 (格式: 空格分隔的 token @显示名, 与 keywords.txt 一致)
+constexpr const char *kWakeKeyword = "n ǐ h ǎo x ī x ī @你好西西";
 
 // ── libcurl 写回调 ────────────────────────────────────────────────────
 
@@ -80,9 +81,14 @@ public:
     : Node("wake_up_node", options)
   {
     // ── 1. 声明参数 ──────────────────────────────────────────────
+    // model_dir 默认指向安装后的 share 目录，模型随包一同 install
+    const std::string default_model_dir =
+      ament_index_cpp::get_package_share_directory("external_control_pkg")
+      + "/models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01";
+
     this->declare_parameter("cloud_asr_url", "http://localhost:8080/asr");
     this->declare_parameter("cmd_topic", "/external/voice_command");
-    this->declare_parameter("model_dir", "");
+    this->declare_parameter("model_dir", default_model_dir);
     this->declare_parameter("energy_threshold", kEnergyThreshold);
     this->declare_parameter("silence_timeout", kSilenceTimeoutSec);
     this->declare_parameter("mic_device", -1);
@@ -90,6 +96,12 @@ public:
     asr_url_ = this->get_parameter("cloud_asr_url").as_string();
     cmd_topic_ = this->get_parameter("cmd_topic").as_string();
     model_dir_ = this->get_parameter("model_dir").as_string();
+    if (model_dir_.empty()) {
+      // launch 文件传了空字符串时，回退到编译期默认值
+      model_dir_ =
+        ament_index_cpp::get_package_share_directory("external_control_pkg")
+        + "/models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01";
+    }
     energy_thr_ = static_cast<float>(this->get_parameter("energy_threshold").as_double());
     silence_to_ = this->get_parameter("silence_timeout").as_double();
     mic_device_ = this->get_parameter("mic_device").as_int();
@@ -191,9 +203,9 @@ private:
 
     // 模型路径 — zipformer transducer
     std::string base = model_dir_;
-    model_encoder_ = base + "/encoder.onnx";
-    model_decoder_ = base + "/decoder.onnx";
-    model_joiner_  = base + "/joiner.onnx";
+    model_encoder_ = base + "/encoder-epoch-99-avg-1-chunk-16-left-64.onnx";
+    model_decoder_ = base + "/decoder-epoch-99-avg-1-chunk-16-left-64.onnx";
+    model_joiner_  = base + "/joiner-epoch-99-avg-1-chunk-16-left-64.onnx";
     model_tokens_  = base + "/tokens.txt";
 
     config.model_config.tokens = model_tokens_.c_str();
@@ -282,6 +294,7 @@ private:
           // 切换到录音模式
           listening_for_wake_ = false;
           is_recording_ = true;
+          min_record_passed_ = false;  // 重置最小时长标志
           record_buffer_.clear();
           record_buffer_.reserve(static_cast<size_t>(kSampleRate * kMaxRecordSec));
           record_start_time_ = now;
@@ -306,12 +319,25 @@ private:
       }
 
       double record_dur   = (now - record_start_time_).seconds();
-      double silence_dur  = (now - last_voice_time_).seconds();
 
+      // 1. 硬超时，强制结束
       if (record_dur > kMaxRecordSec) {
         RCLCPP_INFO(this->get_logger(), "录音超时 (%.1fs)，强制结束", record_dur);
         finishRecording();
-      } else if (record_dur > kMinRecordSec && silence_dur > silence_to_) {
+        return;
+      }
+      // 2. 检测是否刚达到最小时长，若是则重置静音时钟
+      if (!min_record_passed_ && record_dur >= kMinRecordSec) {
+        min_record_passed_ = true;
+        last_voice_time_   = now;  // 静音超时时钟从此刻重新计时
+      }
+      // 3. 未到最小时长，不允许因静音而结束
+      if (!min_record_passed_) {
+        return;
+      }
+      // 4. 到了最小时长，且静音超时 → 结束
+      double silence_dur = (now - last_voice_time_).seconds();
+      if (silence_dur > silence_to_) {
         RCLCPP_INFO(this->get_logger(),
                     "静音超时 (%.1fs)，录音结束 (共%.1fs)",
                     silence_dur, record_dur);
@@ -372,8 +398,9 @@ private:
 
   /** @brief 重置到唤醒监听状态。 */
   void resetState() {
-    is_recording_ = false;
+    is_recording_      = false;
     listening_for_wake_ = true;
+    min_record_passed_ = false;
     record_buffer_.clear();
     record_buffer_.shrink_to_fit();
   }
@@ -549,6 +576,7 @@ private:
   // 状态机
   bool listening_for_wake_ = true;
   bool is_recording_       = false;
+  bool min_record_passed_  = false;  // 是否已过最短录音时长
   std::vector<int16_t> record_buffer_;
   rclcpp::Time record_start_time_{};
   rclcpp::Time last_voice_time_{};
@@ -567,3 +595,4 @@ int main(int argc, char **argv) {
   rclcpp::shutdown();
   return 0;
 }
+
