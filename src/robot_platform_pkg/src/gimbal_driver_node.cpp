@@ -49,6 +49,11 @@ public:
     declare_parameter("max_pitch_rate", 1.0);
     declare_parameter("status_publish_rate_hz", 10.0);
     declare_parameter("stop_command_burst_count", 3);
+    declare_parameter("control_mode", "incremental_position");
+    declare_parameter("incremental_position_duration_sec", 0.1);
+    declare_parameter("incremental_position_max_step_deg", 2.0);
+    declare_parameter("incremental_position_default_dt_sec", 0.05);
+    declare_parameter("incremental_position_max_dt_sec", 0.1);
     declare_parameter("debug_position_yaw_deg", 5.0);
     declare_parameter("debug_position_pitch_deg", 0.0);
     declare_parameter("debug_position_duration_sec", 0.5);
@@ -98,8 +103,9 @@ public:
 
       RCLCPP_INFO(
         get_logger(),
-        "云台驱动配置完成 (sim=%d, can=%s, max_yaw_rate=%.3f, max_pitch_rate=%.3f)",
-        use_sim_, can_interface_.c_str(), max_yaw_rate_, max_pitch_rate_);
+        "云台驱动配置完成 (sim=%d, can=%s, mode=%s, max_yaw_rate=%.3f, max_pitch_rate=%.3f)",
+        use_sim_, can_interface_.c_str(), control_mode_name_.c_str(),
+        max_yaw_rate_, max_pitch_rate_);
       return CallbackReturn::SUCCESS;
     } catch (const std::exception& e) {
       RCLCPP_ERROR(get_logger(), "云台驱动配置失败: %s", e.what());
@@ -123,6 +129,7 @@ public:
 
     last_cmd_time_ = now();
     last_status_pub_time_ = now();
+    last_incremental_cmd_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     has_active_cmd_ = false;
 
     state_timer_ = create_wall_timer(
@@ -181,14 +188,30 @@ public:
   }
 
 private:
+  enum class ControlMode {
+    Speed,
+    IncrementalPosition,
+  };
+
   void read_parameters()
   {
     use_sim_ = get_parameter("use_sim").as_bool();
     can_interface_ = get_parameter("can_interface").as_string();
+    control_mode_name_ = get_parameter("control_mode").as_string();
+    control_mode_ = parse_control_mode(control_mode_name_);
     enable_command_timeout_ = get_parameter("enable_command_timeout").as_bool();
     command_timeout_sec_ = std::max(0.05, get_parameter("command_timeout_sec").as_double());
     max_yaw_rate_ = std::abs(get_parameter("max_yaw_rate").as_double());
     max_pitch_rate_ = std::abs(get_parameter("max_pitch_rate").as_double());
+    incremental_position_duration_sec_ =
+      std::max(0.1, get_parameter("incremental_position_duration_sec").as_double());
+    incremental_position_max_step_rad_ =
+      degrees_to_radians(std::abs(get_parameter("incremental_position_max_step_deg").as_double()));
+    incremental_position_default_dt_sec_ =
+      std::clamp(get_parameter("incremental_position_default_dt_sec").as_double(), 0.005, 0.2);
+    incremental_position_max_dt_sec_ = std::max(
+      incremental_position_default_dt_sec_,
+      get_parameter("incremental_position_max_dt_sec").as_double());
 
     const double status_rate =
       std::max(1.0, get_parameter("status_publish_rate_hz").as_double());
@@ -196,6 +219,23 @@ private:
 
     stop_command_burst_count_ =
       std::max(1, static_cast<int>(get_parameter("stop_command_burst_count").as_int()));
+  }
+
+  static ControlMode parse_control_mode(const std::string& value)
+  {
+    if (value == "speed") {
+      return ControlMode::Speed;
+    }
+    if (value == "incremental_position") {
+      return ControlMode::IncrementalPosition;
+    }
+    throw std::invalid_argument(
+      "control_mode must be 'speed' or 'incremental_position', got '" + value + "'");
+  }
+
+  static double degrees_to_radians(double degrees)
+  {
+    return degrees * M_PI / 180.0;
   }
 
   void create_hardware_interface()
@@ -243,6 +283,7 @@ private:
       static_cast<float>(pitch_deg * DEG2RAD),
       static_cast<float>(duration_sec));
 
+    last_incremental_cmd_time_ = now();
     has_active_cmd_ = false;
     response->success = true;
     response->message = "sent absolute position command";
@@ -262,7 +303,52 @@ private:
     last_cmd_time_ = now();
     auto safe_cmd = clamp_command(*msg);
     has_active_cmd_ = !safe_cmd.hold_yaw || !safe_cmd.hold_pitch;
-    gimbal_->sendCommand(safe_cmd);
+
+    if (control_mode_ == ControlMode::Speed) {
+      gimbal_->sendCommand(safe_cmd);
+    } else {
+      send_incremental_position_command(safe_cmd);
+    }
+  }
+
+  void send_incremental_position_command(const vision_servo_msgs::msg::GimbalCmd& cmd)
+  {
+    const auto now_time = now();
+
+    if (cmd.hold_yaw && cmd.hold_pitch) {
+      last_incremental_cmd_time_ = now_time;
+      return;
+    }
+
+    double dt = incremental_position_default_dt_sec_;
+    if (last_incremental_cmd_time_.nanoseconds() > 0) {
+      dt = (now_time - last_incremental_cmd_time_).seconds();
+      if (dt <= 0.0) {
+        dt = incremental_position_default_dt_sec_;
+      }
+    }
+    last_incremental_cmd_time_ = now_time;
+    dt = std::clamp(dt, 0.005, incremental_position_max_dt_sec_);
+
+    const double yaw_delta = cmd.hold_yaw ? 0.0 :
+      std::clamp(
+        static_cast<double>(cmd.yaw_rate) * dt,
+        -incremental_position_max_step_rad_,
+        incremental_position_max_step_rad_);
+    const double pitch_delta = cmd.hold_pitch ? 0.0 :
+      std::clamp(
+        static_cast<double>(cmd.pitch_rate) * dt,
+        -incremental_position_max_step_rad_,
+        incremental_position_max_step_rad_);
+
+    if (std::abs(yaw_delta) < 1e-6 && std::abs(pitch_delta) < 1e-6) {
+      return;
+    }
+
+    gimbal_->sendIncrementalPositionCommand(
+      static_cast<float>(yaw_delta),
+      static_cast<float>(pitch_delta),
+      static_cast<float>(incremental_position_duration_sec_));
   }
 
   /// 状态读取回调（100 Hz） — 从云台读取角度和角速度。
@@ -366,6 +452,12 @@ private:
       return;
     }
 
+    if (control_mode_ == ControlMode::IncrementalPosition) {
+      last_incremental_cmd_time_ = now();
+      has_active_cmd_ = false;
+      return;
+    }
+
     auto stop = vision_servo_msgs::msg::GimbalCmd();
     stop.header.stamp = now();
     stop.header.frame_id = "gimbal_link";
@@ -421,12 +513,19 @@ private:
 
   rclcpp::Time last_cmd_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_status_pub_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_incremental_cmd_time_{0, 0, RCL_ROS_TIME};
   std::string can_interface_{"can0"};
+  std::string control_mode_name_{"incremental_position"};
   double command_timeout_sec_ = 0.5;
   double max_yaw_rate_ = 1.0;
   double max_pitch_rate_ = 1.0;
   double status_publish_period_sec_ = 0.1;
+  double incremental_position_duration_sec_ = 0.1;
+  double incremental_position_max_step_rad_ = 2.0 * M_PI / 180.0;
+  double incremental_position_default_dt_sec_ = 0.05;
+  double incremental_position_max_dt_sec_ = 0.1;
   int stop_command_burst_count_ = 3;
+  ControlMode control_mode_ = ControlMode::IncrementalPosition;
   bool use_sim_ = false;
   bool enable_command_timeout_ = true;
   bool has_active_cmd_ = false;

@@ -63,6 +63,10 @@ public:
   /// 发送绝对位置指令，用于硬件调试和回中类动作；角度单位 rad
   virtual void sendPositionCommand(float yaw, float pitch, float duration_sec) = 0;
 
+  /// 发送增量位置指令，用于将上层速度指令转换为 RS2 可执行的小步进动作
+  virtual void sendIncrementalPositionCommand(
+    float yaw_delta, float pitch_delta, float duration_sec) = 0;
+
   /// 紧急停止：立即切断电机输出
   virtual void emergencyStop() = 0;
 

@@ -154,21 +154,12 @@ public:
   }
 
   void sendPositionCommand(float yaw, float pitch, float duration_sec) override {
-    if (!connected_) return;
+    sendPositionFrame(yaw, pitch, duration_sec, position_ctrl_byte_, "位置");
+  }
 
-    constexpr double RAD2TENTH_DEG = 1800.0 / M_PI;
-    const auto yaw_tenth = static_cast<int16_t>(
-      std::clamp(std::lround(static_cast<double>(yaw) * RAD2TENTH_DEG), -1800L, 1800L));
-    const auto pitch_tenth = static_cast<int16_t>(
-      std::clamp(std::lround(static_cast<double>(pitch) * RAD2TENTH_DEG), -1800L, 1800L));
-    const auto time_ms = static_cast<uint16_t>(
-      std::clamp(std::lround(static_cast<double>(duration_sec) * 1000.0), 100L, 10000L));
-
-    auto frame = dji_rs2::build_position_command(
-      yaw_tenth, 0, pitch_tenth, time_ms, position_ctrl_byte_);
-    sendFrame(frame);
-    std::cout << "[DJIRS2Gimbal] 位置指令已发送 yaw=" << yaw_tenth
-              << " pitch=" << pitch_tenth << " time_ms=" << time_ms << std::endl;
+  void sendIncrementalPositionCommand(
+    float yaw_delta, float pitch_delta, float duration_sec) override {
+    sendPositionFrame(yaw_delta, pitch_delta, duration_sec, 0x00, "增量位置");
   }
 
   void emergencyStop() override {
@@ -215,6 +206,27 @@ public:
 private:
   static constexpr double kTenthDegToRad = M_PI / 1800.0;
   static constexpr double kFeedbackTimeoutSec = 1.0;
+
+  void sendPositionFrame(
+    float yaw, float pitch, float duration_sec, uint8_t ctrl_byte, const char* label) {
+    if (!connected_) return;
+
+    constexpr double RAD2TENTH_DEG = 1800.0 / M_PI;
+    const auto yaw_tenth = static_cast<int16_t>(
+      std::clamp(std::lround(static_cast<double>(yaw) * RAD2TENTH_DEG), -1800L, 1800L));
+    const auto pitch_tenth = static_cast<int16_t>(
+      std::clamp(std::lround(static_cast<double>(pitch) * RAD2TENTH_DEG), -1800L, 1800L));
+    const auto time_ms = static_cast<uint16_t>(
+      std::clamp(std::lround(static_cast<double>(duration_sec) * 1000.0), 100L, 10000L));
+
+    auto frame = dji_rs2::build_position_command(
+      yaw_tenth, 0, pitch_tenth, time_ms, ctrl_byte);
+    sendFrame(frame);
+    std::cout << "[DJIRS2Gimbal] " << label << "指令已发送 yaw=" << yaw_tenth
+              << " pitch=" << pitch_tenth << " time_ms=" << time_ms
+              << " ctrl=0x" << std::hex << static_cast<int>(ctrl_byte)
+              << std::dec << std::endl;
+  }
 
   static int normalizeTenthDegDelta(int current, int previous) {
     int delta = current - previous;
@@ -512,6 +524,18 @@ public:
     integrate_locked();
     yaw_ = clamp(yaw, -yaw_limit_, yaw_limit_);
     pitch_ = clamp(pitch, -pitch_limit_, pitch_limit_);
+    yaw_rate_ = 0.0f;
+    pitch_rate_ = 0.0f;
+    tx_count_++;
+  }
+
+  void sendIncrementalPositionCommand(
+    float yaw_delta, float pitch_delta, float duration_sec) override {
+    (void)duration_sec;
+    std::lock_guard<std::mutex> lock(mutex_);
+    integrate_locked();
+    yaw_ = clamp(yaw_ + yaw_delta, -yaw_limit_, yaw_limit_);
+    pitch_ = clamp(pitch_ + pitch_delta, -pitch_limit_, pitch_limit_);
     yaw_rate_ = 0.0f;
     pitch_rate_ = 0.0f;
     tx_count_++;
