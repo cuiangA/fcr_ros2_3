@@ -283,6 +283,9 @@ private:
       static_cast<float>(pitch_deg * DEG2RAD),
       static_cast<float>(duration_sec));
 
+    target_yaw_ = yaw_deg * DEG2RAD;
+    target_pitch_ = pitch_deg * DEG2RAD;
+    has_position_target_ = true;
     last_incremental_cmd_time_ = now();
     has_active_cmd_ = false;
     response->success = true;
@@ -317,6 +320,7 @@ private:
 
     if (cmd.hold_yaw && cmd.hold_pitch) {
       last_incremental_cmd_time_ = now_time;
+      sync_position_target_to_current();
       return;
     }
 
@@ -345,10 +349,31 @@ private:
       return;
     }
 
-    gimbal_->sendIncrementalPositionCommand(
-      static_cast<float>(yaw_delta),
-      static_cast<float>(pitch_delta),
+    if (!has_position_target_) {
+      target_yaw_ = has_latest_position_ ? latest_yaw_ : 0.0;
+      target_pitch_ = has_latest_position_ ? latest_pitch_ : 0.0;
+      has_position_target_ = true;
+    }
+
+    target_yaw_ = std::clamp(target_yaw_ + yaw_delta, -M_PI, M_PI);
+    target_pitch_ = std::clamp(target_pitch_ + pitch_delta, -M_PI / 2.0, M_PI / 2.0);
+
+    gimbal_->sendPositionCommand(
+      static_cast<float>(target_yaw_),
+      static_cast<float>(target_pitch_),
       static_cast<float>(incremental_position_duration_sec_));
+  }
+
+  void sync_position_target_to_current()
+  {
+    if (!has_latest_position_) {
+      has_position_target_ = false;
+      return;
+    }
+
+    target_yaw_ = latest_yaw_;
+    target_pitch_ = latest_pitch_;
+    has_position_target_ = true;
   }
 
   /// 状态读取回调（100 Hz） — 从云台读取角度和角速度。
@@ -365,6 +390,10 @@ private:
     float yaw_rate = 0.0f;
     float pitch_rate = 0.0f;
     gimbal_->readState(yaw, pitch, yaw_rate, pitch_rate);
+
+    latest_yaw_ = yaw;
+    latest_pitch_ = pitch;
+    has_latest_position_ = true;
 
     auto joint_state = sensor_msgs::msg::JointState();
     joint_state.header.stamp = now();
@@ -454,6 +483,7 @@ private:
 
     if (control_mode_ == ControlMode::IncrementalPosition) {
       last_incremental_cmd_time_ = now();
+      sync_position_target_to_current();
       has_active_cmd_ = false;
       return;
     }
@@ -516,6 +546,10 @@ private:
   rclcpp::Time last_incremental_cmd_time_{0, 0, RCL_ROS_TIME};
   std::string can_interface_{"can0"};
   std::string control_mode_name_{"incremental_position"};
+  double latest_yaw_ = 0.0;
+  double latest_pitch_ = 0.0;
+  double target_yaw_ = 0.0;
+  double target_pitch_ = 0.0;
   double command_timeout_sec_ = 0.5;
   double max_yaw_rate_ = 1.0;
   double max_pitch_rate_ = 1.0;
@@ -529,6 +563,8 @@ private:
   bool use_sim_ = false;
   bool enable_command_timeout_ = true;
   bool has_active_cmd_ = false;
+  bool has_latest_position_ = false;
+  bool has_position_target_ = false;
 };
 
 }  // namespace robot_platform_pkg
