@@ -36,8 +36,8 @@ constexpr uint8_t BIT_ROLL_INV  = 0x04;   // invert roll
 constexpr uint8_t BIT_PITCH_INV = 0x08;   // invert pitch
 
 // Speed control byte bit flags
-constexpr uint8_t BIT_SPEED_ENABLE = 0x80; // enable speed control
-constexpr uint8_t BIT_FOCAL_DISABLE = 0x08; // disable focal compensation
+constexpr uint8_t BIT_SPEED_ENABLE = 0x40; // enable speed control, DJIR_SDK BIT7
+constexpr uint8_t BIT_FOCAL_DISABLE = 0x04; // disable focal compensation, DJIR_SDK BIT3
 
 // ── CRC-16 (header CRC) ─────────────────────────────────────────────
 // Poly=0x8005, XorIn=0xc55c, ReflectIn/Out=true, XorOut=0x0000

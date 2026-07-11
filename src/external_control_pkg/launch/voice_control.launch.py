@@ -25,10 +25,17 @@ def generate_launch_description():
     silence_timeout = LaunchConfiguration("silence_timeout")
     mic_device = LaunchConfiguration("mic_device")
     start_wake_up_node = LaunchConfiguration("start_wake_up_node")
+    start_command_router = LaunchConfiguration("start_command_router")
+    start_keyboard_node = LaunchConfiguration("start_keyboard_node")
     cmd_gimbal_topic = LaunchConfiguration("cmd_gimbal_topic")
+    manual_cmd_gimbal_topic = LaunchConfiguration("manual_cmd_gimbal_topic")
+    autonomy_cmd_gimbal_topic = LaunchConfiguration("autonomy_cmd_gimbal_topic")
+    router_output_cmd_topic = LaunchConfiguration("router_output_cmd_topic")
     nudge_yaw_rate = LaunchConfiguration("nudge_yaw_rate")
+    nudge_pitch_rate = LaunchConfiguration("nudge_pitch_rate")
     nudge_duration = LaunchConfiguration("nudge_duration")
     right_yaw_sign = LaunchConfiguration("right_yaw_sign")
+    up_pitch_sign = LaunchConfiguration("up_pitch_sign")
     min_confidence = LaunchConfiguration("min_confidence")
 
     nudge_config = PathJoinSubstitution([
@@ -75,13 +82,43 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "cmd_gimbal_topic",
+            default_value="/voice/cmd_gimbal",
+            description="语音云台控制输出话题，通常进入 command_router_node",
+        ),
+        DeclareLaunchArgument(
+            "manual_cmd_gimbal_topic",
+            default_value="/manual/cmd_gimbal",
+            description="手动云台控制输入话题",
+        ),
+        DeclareLaunchArgument(
+            "autonomy_cmd_gimbal_topic",
+            default_value="/autonomy/cmd_gimbal",
+            description="自主云台控制输入话题",
+        ),
+        DeclareLaunchArgument(
+            "router_output_cmd_topic",
             default_value="/cmd_gimbal",
-            description="云台控制输出话题",
+            description="command_router_node 输出到云台驱动的话题",
+        ),
+        DeclareLaunchArgument(
+            "start_command_router",
+            default_value="true",
+            description="是否启动 command_router_node，使语音/键盘/自主控制统一仲裁",
+        ),
+        DeclareLaunchArgument(
+            "start_keyboard_node",
+            default_value="false",
+            description="是否启动键盘云台控制节点",
         ),
         DeclareLaunchArgument(
             "nudge_yaw_rate",
             default_value="0.25",
             description="语音云台短动作 yaw 角速度（rad/s）",
+        ),
+        DeclareLaunchArgument(
+            "nudge_pitch_rate",
+            default_value="0.20",
+            description="语音云台短动作 pitch 角速度（rad/s）",
         ),
         DeclareLaunchArgument(
             "nudge_duration",
@@ -92,6 +129,11 @@ def generate_launch_description():
             "right_yaw_sign",
             default_value="-1.0",
             description="向右一点对应的 yaw 方向符号，实机方向反了改为 1.0",
+        ),
+        DeclareLaunchArgument(
+            "up_pitch_sign",
+            default_value="1.0",
+            description="向上一点对应的 pitch 方向符号，实机方向反了改为 -1.0",
         ),
         DeclareLaunchArgument(
             "min_confidence",
@@ -126,10 +168,41 @@ def generate_launch_description():
                     "voice_command_topic": cmd_topic,
                     "cmd_gimbal_topic": cmd_gimbal_topic,
                     "yaw_step_rate": nudge_yaw_rate,
+                    "pitch_step_rate": nudge_pitch_rate,
                     "step_duration_sec": nudge_duration,
                     "right_yaw_sign": right_yaw_sign,
+                    "up_pitch_sign": up_pitch_sign,
                     "min_confidence": min_confidence,
                 },
             ],
+        ),
+
+        Node(
+            package="external_control_pkg",
+            executable="command_router_node",
+            name="command_router_node",
+            output="screen",
+            condition=IfCondition(start_command_router),
+            parameters=[{
+                "manual_cmd_topic": manual_cmd_gimbal_topic,
+                "voice_cmd_topic": cmd_gimbal_topic,
+                "autonomy_cmd_topic": autonomy_cmd_gimbal_topic,
+                "output_cmd_topic": router_output_cmd_topic,
+            }],
+        ),
+
+        Node(
+            package="external_control_pkg",
+            executable="keyboard_gimbal_control_node",
+            name="keyboard_gimbal_control_node",
+            output="screen",
+            condition=IfCondition(start_keyboard_node),
+            parameters=[{
+                "cmd_gimbal_topic": manual_cmd_gimbal_topic,
+                "yaw_step_rate": nudge_yaw_rate,
+                "pitch_step_rate": nudge_pitch_rate,
+                "right_yaw_sign": right_yaw_sign,
+                "up_pitch_sign": up_pitch_sign,
+            }],
         ),
     ])

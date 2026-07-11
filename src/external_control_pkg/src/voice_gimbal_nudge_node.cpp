@@ -4,10 +4,7 @@
  *
  * This node intentionally handles only small manual gimbal nudges. It is the
  * first narrow link from natural language to actuator command:
- *   "向右一点" -> /external/voice_command -> /cmd_gimbal
- *
- * TODO: When command_router_node is introduced, publish to /manual/cmd_gimbal
- *       instead of the final /cmd_gimbal topic.
+ *   "向右一点" -> /external/voice_command -> /voice/cmd_gimbal -> command_router_node
  */
 
 #include "external_control_pkg/msg/voice_command.hpp"
@@ -31,12 +28,15 @@ public:
   : Node("voice_gimbal_nudge_node", options)
   {
     declare_parameter("voice_command_topic", "/external/voice_command");
-    declare_parameter("cmd_gimbal_topic", "/cmd_gimbal");
+    declare_parameter("cmd_gimbal_topic", "/voice/cmd_gimbal");
     declare_parameter("publish_rate_hz", 20.0);
     declare_parameter("step_duration_sec", 0.4);
     declare_parameter("yaw_step_rate", 0.25);
+    declare_parameter("pitch_step_rate", 0.20);
     declare_parameter("min_confidence", 0.5);
     declare_parameter("right_yaw_sign", -1.0);
+    declare_parameter("up_pitch_sign", 1.0);
+    declare_parameter("speed_scale_step", 0.2);
     declare_parameter("frame_id", "gimbal_link");
 
     voice_command_topic_ = get_parameter("voice_command_topic").as_string();
@@ -44,8 +44,11 @@ public:
     publish_rate_hz_ = std::max(1.0, get_parameter("publish_rate_hz").as_double());
     step_duration_sec_ = std::max(0.05, get_parameter("step_duration_sec").as_double());
     yaw_step_rate_ = std::abs(get_parameter("yaw_step_rate").as_double());
+    pitch_step_rate_ = std::abs(get_parameter("pitch_step_rate").as_double());
     min_confidence_ = get_parameter("min_confidence").as_double();
     right_yaw_sign_ = sign(get_parameter("right_yaw_sign").as_double());
+    up_pitch_sign_ = sign(get_parameter("up_pitch_sign").as_double());
+    speed_scale_step_ = std::clamp(get_parameter("speed_scale_step").as_double(), 0.05, 0.5);
     frame_id_ = get_parameter("frame_id").as_string();
 
     auto reliable_qos = rclcpp::QoS(10).reliable();
@@ -76,7 +79,11 @@ private:
     NONE,
     LEFT,
     RIGHT,
+    UP,
+    DOWN,
     STOP,
+    SPEED_UP,
+    SPEED_DOWN,
   };
 
   void voiceCallback(
@@ -94,19 +101,38 @@ private:
       return;
     }
 
-    const double yaw_sign = direction == NudgeDirection::RIGHT
-      ? right_yaw_sign_
-      : -right_yaw_sign_;
-    active_yaw_rate_ = yaw_sign * yaw_step_rate_;
+    if (direction == NudgeDirection::SPEED_UP || direction == NudgeDirection::SPEED_DOWN) {
+      const double delta = direction == NudgeDirection::SPEED_UP
+        ? speed_scale_step_
+        : -speed_scale_step_;
+      speed_scale_ = std::clamp(speed_scale_ + delta, 0.5, 2.0);
+      RCLCPP_INFO(
+        get_logger(), "voice gimbal speed scale %.2f | raw=\"%s\"",
+        speed_scale_, msg->raw_text.c_str());
+      return;
+    }
+
+    active_yaw_rate_ = 0.0;
+    active_pitch_rate_ = 0.0;
+    if (direction == NudgeDirection::RIGHT) {
+      active_yaw_rate_ = right_yaw_sign_ * yaw_step_rate_ * speed_scale_;
+    } else if (direction == NudgeDirection::LEFT) {
+      active_yaw_rate_ = -right_yaw_sign_ * yaw_step_rate_ * speed_scale_;
+    } else if (direction == NudgeDirection::UP) {
+      active_pitch_rate_ = up_pitch_sign_ * pitch_step_rate_ * speed_scale_;
+    } else if (direction == NudgeDirection::DOWN) {
+      active_pitch_rate_ = -up_pitch_sign_ * pitch_step_rate_ * speed_scale_;
+    }
+
     active_until_ = now() + rclcpp::Duration::from_seconds(step_duration_sec_);
     motion_active_ = true;
 
-    publishYawRate(active_yaw_rate_);
+    publishRate(active_yaw_rate_, active_pitch_rate_);
     RCLCPP_INFO(
       get_logger(),
-      "voice gimbal nudge %s | yaw_rate=%.3f rad/s, duration=%.2fs, raw=\"%s\"",
-      direction == NudgeDirection::RIGHT ? "right" : "left",
-      active_yaw_rate_, step_duration_sec_, msg->raw_text.c_str());
+      "voice gimbal nudge %s | yaw_rate=%.3f, pitch_rate=%.3f rad/s, duration=%.2fs, raw=\"%s\"",
+      directionName(direction).c_str(), active_yaw_rate_, active_pitch_rate_,
+      step_duration_sec_, msg->raw_text.c_str());
   }
 
   void publishLoop() {
@@ -115,7 +141,7 @@ private:
     }
 
     if (now() <= active_until_) {
-      publishYawRate(active_yaw_rate_);
+      publishRate(active_yaw_rate_, active_pitch_rate_);
       return;
     }
 
@@ -135,6 +161,18 @@ private:
     if (hasIntent(msg, {"gimbal_nudge_left", "gimbal_left", "turn_gimbal_left"})) {
       return NudgeDirection::LEFT;
     }
+    if (hasIntent(msg, {"gimbal_nudge_up", "gimbal_up", "tilt_gimbal_up"})) {
+      return NudgeDirection::UP;
+    }
+    if (hasIntent(msg, {"gimbal_nudge_down", "gimbal_down", "tilt_gimbal_down"})) {
+      return NudgeDirection::DOWN;
+    }
+    if (hasIntent(msg, {"gimbal_speed_up", "speed_up"})) {
+      return NudgeDirection::SPEED_UP;
+    }
+    if (hasIntent(msg, {"gimbal_speed_down", "speed_down"})) {
+      return NudgeDirection::SPEED_DOWN;
+    }
 
     const auto& text = msg.raw_text;
     if (containsAny(text, {"停止", "停一下", "别动"})) {
@@ -145,6 +183,18 @@ private:
     }
     if (containsAny(text, {"向左一点", "向左一下", "左转一点", "左移一点", "往左一点"})) {
       return NudgeDirection::LEFT;
+    }
+    if (containsAny(text, {"向上一点", "向上一下", "抬高一点", "往上一点", "上移一点"})) {
+      return NudgeDirection::UP;
+    }
+    if (containsAny(text, {"向下一点", "向下一下", "降低一点", "往下一点", "下移一点"})) {
+      return NudgeDirection::DOWN;
+    }
+    if (containsAny(text, {"快一点", "速度快一点", "快一些"})) {
+      return NudgeDirection::SPEED_UP;
+    }
+    if (containsAny(text, {"慢一点", "速度慢一点", "慢一些"})) {
+      return NudgeDirection::SPEED_DOWN;
     }
 
     return NudgeDirection::NONE;
@@ -178,14 +228,29 @@ private:
       });
   }
 
-  void publishYawRate(double yaw_rate) {
+  static std::string directionName(NudgeDirection direction) {
+    switch (direction) {
+    case NudgeDirection::LEFT:
+      return "left";
+    case NudgeDirection::RIGHT:
+      return "right";
+    case NudgeDirection::UP:
+      return "up";
+    case NudgeDirection::DOWN:
+      return "down";
+    default:
+      return "none";
+    }
+  }
+
+  void publishRate(double yaw_rate, double pitch_rate) {
     auto cmd = vision_servo_msgs::msg::GimbalCmd();
     cmd.header.stamp = now();
     cmd.header.frame_id = frame_id_;
     cmd.yaw_rate = static_cast<float>(yaw_rate);
-    cmd.pitch_rate = 0.0f;
-    cmd.hold_yaw = false;
-    cmd.hold_pitch = true;
+    cmd.pitch_rate = static_cast<float>(pitch_rate);
+    cmd.hold_yaw = std::abs(yaw_rate) < 1e-6;
+    cmd.hold_pitch = std::abs(pitch_rate) < 1e-6;
     gimbal_pub_->publish(cmd);
   }
 
@@ -217,11 +282,16 @@ private:
   double publish_rate_hz_ = 20.0;
   double step_duration_sec_ = 0.4;
   double yaw_step_rate_ = 0.25;
+  double pitch_step_rate_ = 0.20;
   double min_confidence_ = 0.5;
   double right_yaw_sign_ = -1.0;
+  double up_pitch_sign_ = 1.0;
+  double speed_scale_step_ = 0.2;
+  double speed_scale_ = 1.0;
 
   bool motion_active_ = false;
   double active_yaw_rate_ = 0.0;
+  double active_pitch_rate_ = 0.0;
   rclcpp::Time active_until_{0, 0, RCL_ROS_TIME};
 };
 

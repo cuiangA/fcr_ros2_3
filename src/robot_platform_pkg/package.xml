@@ -25,6 +25,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
   <depend>rclcpp_components</depend>
   <depend>vision_servo_msgs</depend>     <!-- GimbalCmd, PlatformState 消息 -->
   <depend>geometry_msgs</depend>         <!-- Twist, Pose, Transform -->

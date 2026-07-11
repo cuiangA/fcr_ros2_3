@@ -19,6 +19,7 @@
  */
 
 #include <rclcpp/rclcpp.hpp>
+#include <vision_servo_msgs/msg/gimbal_status.hpp>
 #include <vision_servo_msgs/msg/platform_state.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -52,6 +53,10 @@ public:
     joint_state_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
       "/joint_states", rclcpp::QoS(10).reliable(),
       std::bind(&PlatformManagerNode::joint_state_callback, this, std::placeholders::_1));
+
+    gimbal_status_sub_ = this->create_subscription<vision_servo_msgs::msg::GimbalStatus>(
+      "/gimbal/status", rclcpp::QoS(10).reliable(),
+      std::bind(&PlatformManagerNode::gimbal_status_callback, this, std::placeholders::_1));
 
     // ── 3. 发布 PlatformState（TRANSIENT_LOCAL = 迟加入者也能获取） ─
     state_pub_ = this->create_publisher<vision_servo_msgs::msg::PlatformState>(
@@ -107,11 +112,21 @@ private:
     }
   }
 
+  /// 云台状态回调 — 缓存真实连接状态和驱动发布的最新云台状态
+  void gimbal_status_callback(
+    const vision_servo_msgs::msg::GimbalStatus::ConstSharedPtr& msg)
+  {
+    gimbal_yaw_ = msg->yaw;
+    gimbal_pitch_ = msg->pitch;
+    gimbal_yaw_rate_ = msg->yaw_rate;
+    gimbal_pitch_rate_ = msg->pitch_rate;
+    gimbal_connected_ = msg->connected;
+  }
+
   /**
    * @brief 状态发布回调 — 将缓存的底盘/IMU 状态聚合为 PlatformState 并发布。
    *
-   * 连接状态标志（chassis/gimbal/imu connected）在当前实现中固定为 true。
-   * 生产环境中应通过心跳检测（heartbeat）动态判断各子系统是否在线。
+   * 当前 gimbal_connected 来自 /gimbal/status；底盘和 IMU 状态仍待接入各自诊断话题。
    */
   void publish_state() {
     vision_servo_msgs::msg::PlatformState state;
@@ -143,9 +158,8 @@ private:
     state.gimbal_pitch_rate = gimbal_pitch_rate_;
 
     // ── 子系统连接状态 ────────────────────────────────────────────
-    // TODO：生产环境中通过心跳包检测各子系统的真实连接状态
     state.chassis_connected = true;
-    state.gimbal_connected = true;
+    state.gimbal_connected = gimbal_connected_;
     state.imu_connected = true;
 
     state_pub_->publish(state);
@@ -155,6 +169,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
+  rclcpp::Subscription<vision_servo_msgs::msg::GimbalStatus>::SharedPtr gimbal_status_sub_;
   rclcpp::Publisher<vision_servo_msgs::msg::PlatformState>::SharedPtr state_pub_;
   rclcpp::TimerBase::SharedPtr publish_timer_;
 
@@ -166,6 +181,7 @@ private:
   double gimbal_pitch_ = 0.0;           ///< 云台俯仰角 (rad)，来自 /joint_states
   double gimbal_yaw_rate_ = 0.0;        ///< 云台偏航角速度 (rad/s)，来自 /joint_states
   double gimbal_pitch_rate_ = 0.0;      ///< 云台俯仰角速度 (rad/s)，来自 /joint_states
+  bool gimbal_connected_ = false;       ///< 云台连接状态，来自 /gimbal/status
 };
 
 }  // namespace robot_platform_pkg

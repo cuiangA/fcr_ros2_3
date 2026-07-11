@@ -2,8 +2,16 @@
 # DJI RS2 云台参数
 gimbal_driver:
   ros__parameters:
+    autostart: true           # true = 进程启动后自动 configure + activate；false = 手动 ros2 lifecycle set
     use_sim: false            # true = 仿真模式，无需 CAN 硬件
     can_interface: "can0"     # CAN 接口名称（Linux SocketCAN 接口）
-    can_id: 513               # CAN 帧 ID（0x201 = DJI RS2 默认地址）
+    # DJI RS2 R SDK over CAN 使用固定标准帧 ID：
+    #   host -> gimbal: 0x223
+    #   gimbal -> host: 0x222
+    # 这两个 ID 在 dji_rs2_protocol.hpp 中定义，不作为运行时参数配置。
     enable_command_timeout: true
     command_timeout_sec: 0.5
+    max_yaw_rate: 1.0        # 驱动层最终限幅，单位 rad/s
+    max_pitch_rate: 1.0      # 驱动层最终限幅，单位 rad/s
+    status_publish_rate_hz: 10.0
+    stop_command_burst_count: 3

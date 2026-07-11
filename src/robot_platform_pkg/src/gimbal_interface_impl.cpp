@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -40,8 +41,8 @@ public:
 
   ~DJIRS2Gimbal() override { shutdown(); }
 
-  bool init(const std::string& can_interface, int /*can_id*/) override {
-    // can_id 参数预留；DJI RS2 使用固定 CAN ID: 发 0x223 / 收 0x222
+  bool init(const std::string& can_interface) override {
+    // DJI RS2 R SDK over CAN uses fixed IDs: host->gimbal 0x223, gimbal->host 0x222.
     can_if_name_ = can_interface;
 
     sock_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
@@ -130,6 +131,7 @@ public:
             now - last_query_time_).count() >= 100) {
       last_query_time_ = now;
       auto query_frame = dji_rs2::build_query_position_command();
+      recordPendingQuery(query_frame);
       sendFrame(query_frame);
     }
 
@@ -137,11 +139,13 @@ public:
     constexpr double TENTH_DEG2RAD = M_PI / 1800.0;  // 0.1 deg → rad
     yaw = static_cast<float>(cached_yaw_tenth_deg_ * TENTH_DEG2RAD);
     pitch = static_cast<float>(cached_pitch_tenth_deg_ * TENTH_DEG2RAD);
-
-    // 角速度通过相邻两次位置差估算
-    yaw_rate = 0.0f;
-    pitch_rate = 0.0f;
-    // TODO: 真实角速度可从 RS2 的 IMU 数据推算，或通过 get_position 的高频查询差分得到
+    if (hasRecentFeedbackLocked(std::chrono::steady_clock::now())) {
+      yaw_rate = cached_yaw_rate_rad_s_;
+      pitch_rate = cached_pitch_rate_rad_s_;
+    } else {
+      yaw_rate = 0.0f;
+      pitch_rate = 0.0f;
+    }
   }
 
   void home() override {
@@ -161,6 +165,7 @@ public:
 
   void shutdown() override {
     if (!connected_) return;
+    emergencyStop();
     stopped_ = true;
     if (recv_thread_.joinable())
       recv_thread_.join();
@@ -172,9 +177,77 @@ public:
     std::cout << "[DJIRS2Gimbal] 已关闭" << std::endl;
   }
 
-  bool isConnected() const override { return connected_; }
+  bool isConnected() const override {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return connected_ && hasRecentFeedbackLocked(std::chrono::steady_clock::now());
+  }
+
+  GimbalStatusSnapshot getStatus() const override {
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    GimbalStatusSnapshot status;
+    status.connected = connected_ && hasRecentFeedbackLocked(now);
+    status.last_rx_age_sec = lastRxAgeSecLocked(now);
+    status.tx_count = tx_count_.load();
+    status.rx_count = rx_count_.load();
+    status.crc_error_count = crc_error_count_.load();
+    status.can_error_count = can_error_count_.load();
+    status.parse_error_count = parse_error_count_.load();
+    return status;
+  }
 
 private:
+  static constexpr double kTenthDegToRad = M_PI / 1800.0;
+  static constexpr double kFeedbackTimeoutSec = 1.0;
+
+  static int normalizeTenthDegDelta(int current, int previous) {
+    int delta = current - previous;
+    while (delta > 1800) {
+      delta -= 3600;
+    }
+    while (delta < -1800) {
+      delta += 3600;
+    }
+    return delta;
+  }
+
+  bool hasRecentFeedbackLocked(std::chrono::steady_clock::time_point now) const {
+    if (!has_state_sample_) {
+      return false;
+    }
+    return std::chrono::duration<double>(now - last_state_update_time_).count()
+      <= kFeedbackTimeoutSec;
+  }
+
+  float lastRxAgeSecLocked(std::chrono::steady_clock::time_point now) const {
+    if (!has_state_sample_) {
+      return -1.0f;
+    }
+    return static_cast<float>(
+      std::chrono::duration<double>(now - last_state_update_time_).count());
+  }
+
+  void recordPendingQuery(const std::vector<uint8_t>& frame) {
+    if (frame.size() < 10) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    pending_query_seq_hi_ = frame[8];
+    pending_query_seq_lo_ = frame[9];
+    has_pending_query_seq_ = true;
+  }
+
+  bool matchesPendingQuery(const std::vector<uint8_t>& frame) const {
+    if (frame.size() < 10 || frame[3] != dji_rs2::RSP_TYPE) {
+      return true;
+    }
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return has_pending_query_seq_ &&
+      frame[8] == pending_query_seq_hi_ &&
+      frame[9] == pending_query_seq_lo_;
+  }
+
   /// 通过 SocketCAN 发送完整协议帧（自动分片为 8 字节 CAN 帧）
   void sendFrame(const std::vector<uint8_t>& data) {
     if (sock_ < 0) return;
@@ -188,10 +261,12 @@ private:
       std::memcpy(frame.data, data.data() + offset, frame.can_dlc);
 
       ssize_t n = write(sock_, &frame, sizeof(frame));
-      if (n < 0) {
+      if (n != static_cast<ssize_t>(sizeof(frame))) {
+        can_error_count_++;
         std::cerr << "[DJIRS2Gimbal] CAN 发送失败: " << strerror(errno) << std::endl;
         break;
       }
+      tx_count_++;
       offset += frame.can_dlc;
     }
   }
@@ -208,13 +283,16 @@ private:
       struct can_frame frame;
       ssize_t n = read(sock_, &frame, sizeof(frame));
       if (n <= 0) {
-        // 超时或无数据
+        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+          can_error_count_++;
+        }
         continue;
       }
 
       // 过滤：仅处理响应帧 CAN ID (0x222)
       if ((frame.can_id & CAN_SFF_MASK) != dji_rs2::RECV_CAN_ID)
         continue;
+      rx_count_++;
 
       // 将 CAN 帧数据追加到字节缓冲区
       for (int i = 0; i < frame.can_dlc; ++i)
@@ -255,6 +333,7 @@ private:
             if (checkHeadCrc(work_frame)) {
               step = 4;
             } else {
+              crc_error_count_++;
               step = 0;
               work_frame.clear();
             }
@@ -267,6 +346,8 @@ private:
           if (work_frame.size() == pack_len) {
             if (checkPackCrc(work_frame)) {
               processFrame(work_frame);
+            } else {
+              crc_error_count_++;
             }
             work_frame.clear();
             step = 0;
@@ -308,12 +389,33 @@ private:
 
   /// 解析帧并更新缓存的位置状态
   void processFrame(const std::vector<uint8_t>& frame) {
+    if (!matchesPendingQuery(frame)) {
+      return;
+    }
+
     int16_t yaw, roll, pitch;
     if (dji_rs2::parse_position_response(frame, yaw, roll, pitch)) {
+      const auto now = std::chrono::steady_clock::now();
       std::lock_guard<std::mutex> lock(state_mutex_);
+      if (has_state_sample_) {
+        const double dt = std::chrono::duration<double>(
+          now - last_state_update_time_).count();
+        if (dt > 1e-4) {
+          cached_yaw_rate_rad_s_ = static_cast<float>(
+            normalizeTenthDegDelta(yaw, cached_yaw_tenth_deg_) * kTenthDegToRad / dt);
+          cached_pitch_rate_rad_s_ = static_cast<float>(
+            normalizeTenthDegDelta(pitch, cached_pitch_tenth_deg_) * kTenthDegToRad / dt);
+        }
+      } else {
+        cached_yaw_rate_rad_s_ = 0.0f;
+        cached_pitch_rate_rad_s_ = 0.0f;
+      }
       cached_yaw_tenth_deg_ = yaw;
       cached_roll_tenth_deg_ = roll;
       cached_pitch_tenth_deg_ = pitch;
+      last_state_update_time_ = now;
+      has_state_sample_ = true;
+      has_pending_query_seq_ = false;
     }
   }
 
@@ -322,6 +424,11 @@ private:
   std::thread recv_thread_;       ///< 接收线程
   std::atomic<bool> stopped_;
   std::atomic<bool> connected_;
+  std::atomic<uint32_t> tx_count_{0};
+  std::atomic<uint32_t> rx_count_{0};
+  std::atomic<uint32_t> crc_error_count_{0};
+  std::atomic<uint32_t> can_error_count_{0};
+  std::atomic<uint32_t> parse_error_count_{0};
 
   uint8_t position_ctrl_byte_;    ///< 位置控制标志
   uint8_t speed_ctrl_byte_;       ///< 速度控制标志
@@ -332,6 +439,13 @@ private:
   int16_t cached_yaw_tenth_deg_ = 0;
   int16_t cached_roll_tenth_deg_ = 0;
   int16_t cached_pitch_tenth_deg_ = 0;
+  float cached_yaw_rate_rad_s_ = 0.0f;
+  float cached_pitch_rate_rad_s_ = 0.0f;
+  std::chrono::steady_clock::time_point last_state_update_time_{};
+  bool has_state_sample_ = false;
+  uint8_t pending_query_seq_hi_ = 0;
+  uint8_t pending_query_seq_lo_ = 0;
+  bool has_pending_query_seq_ = false;
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -340,8 +454,8 @@ private:
 
 class SimulatedGimbal : public IGimbalInterface {
 public:
-  bool init(const std::string& can_interface, int can_id) override {
-    (void)can_interface; (void)can_id;
+  bool init(const std::string& can_interface) override {
+    (void)can_interface;
     last_update_ = Clock::now();
     std::cout << "[SimGimbal] 初始化（仿真模式）" << std::endl;
     return true;
@@ -353,6 +467,7 @@ public:
 
     yaw_rate_ = cmd.hold_yaw ? 0.0f : clamp(cmd.yaw_rate, -max_yaw_rate_, max_yaw_rate_);
     pitch_rate_ = cmd.hold_pitch ? 0.0f : clamp(cmd.pitch_rate, -max_pitch_rate_, max_pitch_rate_);
+    tx_count_++;
   }
 
   void readState(float& yaw, float& pitch,
@@ -363,6 +478,7 @@ public:
     pitch = pitch_;
     yaw_rate = yaw_rate_;
     pitch_rate = pitch_rate_;
+    rx_count_++;
   }
 
   void home() override {
@@ -383,6 +499,16 @@ public:
 
   void shutdown() override { emergencyStop(); }
   bool isConnected() const override { return true; }
+
+  GimbalStatusSnapshot getStatus() const override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    GimbalStatusSnapshot status;
+    status.connected = true;
+    status.last_rx_age_sec = 0.0f;
+    status.tx_count = tx_count_;
+    status.rx_count = rx_count_;
+    return status;
+  }
 
 private:
   using Clock = std::chrono::steady_clock;
@@ -410,6 +536,8 @@ private:
   float pitch_limit_ = 1.2f;
   float max_yaw_rate_ = 1.0f;
   float max_pitch_rate_ = 1.0f;
+  uint32_t tx_count_ = 0;
+  uint32_t rx_count_ = 0;
 };
 
 // ── 工厂函数 ──────────────────────────────────────────────────────────

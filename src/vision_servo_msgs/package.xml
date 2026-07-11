@@ -6,7 +6,7 @@
   @brief vision_servo_msgs 包清单文件。
 
   该包是 FCR 视觉伺服系统的通信接口定义包，包含：
-    - 5 个自定义消息（Target, TargetArray, ServoState, PlatformState, GimbalCmd）
+    - 自定义消息（Target, TargetArray, ServoState, PlatformState, GimbalCmd, GimbalStatus）
     - 3 个服务（SetTrackingTarget, SetServoMode, CalibrateCamera）
     - 1 个动作（VisualServo，用于长周期伺服任务）
 

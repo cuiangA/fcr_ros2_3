@@ -14,10 +14,21 @@
 
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
 #include <vision_servo_msgs/msg/platform_state.hpp>
+#include <cstdint>
 #include <memory>
 #include <string>
 
 namespace robot_platform_pkg {
+
+struct GimbalStatusSnapshot {
+  bool connected = false;
+  float last_rx_age_sec = -1.0f;
+  uint32_t tx_count = 0;
+  uint32_t rx_count = 0;
+  uint32_t crc_error_count = 0;
+  uint32_t can_error_count = 0;
+  uint32_t parse_error_count = 0;
+};
 
 class IGimbalInterface {
 public:
@@ -26,10 +37,12 @@ public:
   /**
    * @brief 初始化云台（打开 CAN 总线，配置电机驱动器）。
    * @param can_interface CAN 接口名称（如 "can0"）
-   * @param can_id        CAN 帧 ID（DJI RS2 默认 0x201）
+   *
+   * 当前 DJI RS2 后端使用 DJI R SDK 协议固定 CAN ID：
+   * host → gimbal 为 0x223，gimbal → host 为 0x222。
    * @return 初始化成功返回 true
    */
-  virtual bool init(const std::string& can_interface, int can_id) = 0;
+  virtual bool init(const std::string& can_interface) = 0;
 
   /// 向云台发送速度指令（yaw_rate, pitch_rate）
   virtual void sendCommand(const vision_servo_msgs::msg::GimbalCmd& cmd) = 0;
@@ -55,6 +68,9 @@ public:
 
   /// 检查硬件是否连接且健康
   virtual bool isConnected() const = 0;
+
+  /// 读取硬件连接和传输诊断快照
+  virtual GimbalStatusSnapshot getStatus() const = 0;
 };
 
 // ── 工厂函数 ──────────────────────────────────────────────────────

@@ -3,7 +3,9 @@
 #
 # 构建目标：
 #   1. wake_up_node — C++ 主节点（PortAudio + sherpa-onnx + libcurl）
-#   2. voice_gimbal_nudge_node — 语音短指令到 /cmd_gimbal 的最小桥接节点
+#   2. voice_gimbal_nudge_node — 语音短指令到 /voice/cmd_gimbal 的桥接节点
+#   3. command_router_node — 手动/语音/自主云台命令优先级仲裁
+#   4. keyboard_gimbal_control_node — 键盘云台调试控制
 #
 # 构建依赖（需预先安装）：
 #   sudo apt install portaudio19-dev libcurl4-openssl-dev nlohmann-json3-dev
@@ -146,6 +148,28 @@ target_link_libraries(voice_gimbal_nudge_node
 )
 
 list(APPEND EXTERNAL_CONTROL_TARGETS voice_gimbal_nudge_node)
+
+# ── 云台命令优先级仲裁节点 ───────────────────────────────────────────
+add_executable(command_router_node
+  src/command_router_node.cpp
+)
+
+ament_target_dependencies(command_router_node
+  rclcpp std_msgs vision_servo_msgs
+)
+
+list(APPEND EXTERNAL_CONTROL_TARGETS command_router_node)
+
+# ── 键盘云台控制节点 ─────────────────────────────────────────────────
+add_executable(keyboard_gimbal_control_node
+  src/keyboard_gimbal_control_node.cpp
+)
+
+ament_target_dependencies(keyboard_gimbal_control_node
+  rclcpp vision_servo_msgs
+)
+
+list(APPEND EXTERNAL_CONTROL_TARGETS keyboard_gimbal_control_node)
 
 install(TARGETS ${EXTERNAL_CONTROL_TARGETS}
   DESTINATION lib/${PROJECT_NAME})

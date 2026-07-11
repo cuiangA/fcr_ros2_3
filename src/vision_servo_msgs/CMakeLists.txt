@@ -40,6 +40,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ServoState.msg"      # 伺服控制器内部状态（误差、收敛率、控制模式）
   "msg/PlatformState.msg"   # 机器人平台状态（底盘速度 + 云台角度）
   "msg/GimbalCmd.msg"       # 云台控制指令（yaw/pitch 角度或角速度）
+  "msg/GimbalStatus.msg"    # 云台运行状态与 CAN/协议诊断信息
   # ── 服务定义 ──────────────────────────────────────────────────
   "srv/SetTrackingTarget.srv" # 设置/切换跟踪目标（请求：目标 ID，响应：成功/失败）
   "srv/SetServoMode.srv"      # 切换伺服控制模式（IBVS/PBVS/MPC/RL）

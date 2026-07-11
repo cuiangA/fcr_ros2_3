@@ -238,18 +238,19 @@ std::vector<uint8_t> build_query_position_command() {
 
 bool parse_position_response(const std::vector<uint8_t>& frame,
                              int16_t& yaw, int16_t& roll, int16_t& pitch) {
-    // Frame must be large enough: prefix(10)+crc16(2)+cmdSet(1)+cmdID(1)+data... +crc32(4)
-    // For position response: cmdSet=0x0E, cmdID=0x02, data contains position fields
+    // Frame must be large enough for data[14:20] = yaw, roll, pitch.
     if (frame.size() < 20) return false;
 
     uint8_t cmd_type = frame[3];
-    uint8_t cmd_set  = frame[12];
-    uint8_t cmd_id   = frame[13];
 
-    // Accept both response type (0x20) and command type (0x03)
-    if ((cmd_type != RSP_TYPE && cmd_type != CMD_TYPE) ||
-        cmd_set != CMD_SET || cmd_id != CMD_ID_QUERY)
+    if (cmd_type == CMD_TYPE) {
+        uint8_t cmd_set  = frame[12];
+        uint8_t cmd_id   = frame[13];
+        if (cmd_set != CMD_SET || cmd_id != CMD_ID_QUERY)
+            return false;
+    } else if (cmd_type != RSP_TYPE) {
         return false;
+    }
 
     // data[14:20] = yaw(2), roll(2), pitch(2) — little-endian int16
     yaw   = static_cast<int16_t>(frame[14] | (frame[15] << 8));

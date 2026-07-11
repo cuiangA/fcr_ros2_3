@@ -28,6 +28,7 @@ endif()
 # ── 依赖声明 ──────────────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(vision_servo_msgs REQUIRED)   # GimbalCmd, PlatformState
 find_package(geometry_msgs REQUIRED)        # Twist, Pose, Transform
@@ -61,7 +62,7 @@ add_executable(gimbal_driver_node src/gimbal_driver_node.cpp src/gimbal_interfac
   src/dji_rs2_protocol.cpp)
 target_include_directories(gimbal_driver_node PRIVATE include)
 ament_target_dependencies(gimbal_driver_node
-  rclcpp vision_servo_msgs sensor_msgs
+  rclcpp rclcpp_lifecycle vision_servo_msgs sensor_msgs
 )
 target_link_libraries(gimbal_driver_node platform_qos)
 install(TARGETS gimbal_driver_node DESTINATION lib/${PROJECT_NAME})

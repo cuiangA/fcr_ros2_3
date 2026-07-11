@@ -1,10 +1,13 @@
 voice_gimbal_nudge_node:
   ros__parameters:
     voice_command_topic: "/external/voice_command"
-    cmd_gimbal_topic: "/cmd_gimbal"
+    cmd_gimbal_topic: "/voice/cmd_gimbal"
     publish_rate_hz: 20.0
     step_duration_sec: 0.4
     yaw_step_rate: 0.25
+    pitch_step_rate: 0.20
     min_confidence: 0.5
     right_yaw_sign: -1.0
+    up_pitch_sign: 1.0
+    speed_scale_step: 0.2
     frame_id: "gimbal_link"
