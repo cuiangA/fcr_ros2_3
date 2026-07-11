@@ -60,6 +60,9 @@ public:
   /// 云台归零（回到机械零点位置）
   virtual void home() = 0;
 
+  /// 发送绝对位置指令，用于硬件调试和回中类动作；角度单位 rad
+  virtual void sendPositionCommand(float yaw, float pitch, float duration_sec) = 0;
+
   /// 紧急停止：立即切断电机输出
   virtual void emergencyStop() = 0;
 

@@ -26,6 +26,7 @@
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 #include <rclcpp_lifecycle/lifecycle_publisher.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
 #include <vision_servo_msgs/msg/gimbal_status.hpp>
 
@@ -48,6 +49,9 @@ public:
     declare_parameter("max_pitch_rate", 1.0);
     declare_parameter("status_publish_rate_hz", 10.0);
     declare_parameter("stop_command_burst_count", 3);
+    declare_parameter("debug_position_yaw_deg", 5.0);
+    declare_parameter("debug_position_pitch_deg", 0.0);
+    declare_parameter("debug_position_duration_sec", 0.5);
 
     RCLCPP_INFO(get_logger(), "云台 lifecycle 驱动已创建，等待 configure/activate");
   }
@@ -79,6 +83,14 @@ public:
 
       gimbal_status_pub_ = create_publisher<vision_servo_msgs::msg::GimbalStatus>(
         "/gimbal/status", rclcpp::QoS(10).reliable());
+
+      debug_position_srv_ = create_service<std_srvs::srv::Trigger>(
+        "/gimbal/debug_position",
+        std::bind(
+          &GimbalDriverNode::debug_position_callback,
+          this,
+          std::placeholders::_1,
+          std::placeholders::_2));
 
       last_cmd_time_ = now();
       last_status_pub_time_ = now();
@@ -206,6 +218,38 @@ private:
   bool is_active_state()
   {
     return get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+  }
+
+  void debug_position_callback(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  {
+    (void)request;
+
+    if (!is_active_state() || !gimbal_) {
+      response->success = false;
+      response->message = "gimbal_driver is not active";
+      return;
+    }
+
+    const double yaw_deg = get_parameter("debug_position_yaw_deg").as_double();
+    const double pitch_deg = get_parameter("debug_position_pitch_deg").as_double();
+    const double duration_sec =
+      std::max(0.1, get_parameter("debug_position_duration_sec").as_double());
+
+    constexpr double DEG2RAD = M_PI / 180.0;
+    gimbal_->sendPositionCommand(
+      static_cast<float>(yaw_deg * DEG2RAD),
+      static_cast<float>(pitch_deg * DEG2RAD),
+      static_cast<float>(duration_sec));
+
+    has_active_cmd_ = false;
+    response->success = true;
+    response->message = "sent absolute position command";
+    RCLCPP_INFO(
+      get_logger(),
+      "已发送位置调试指令 yaw=%.2f deg, pitch=%.2f deg, duration=%.2f s",
+      yaw_deg, pitch_deg, duration_sec);
   }
 
   /// 云台指令回调。只有 Active 状态才会真正转发给硬件。
@@ -362,12 +406,14 @@ private:
       state_timer_.reset();
     }
     cmd_sub_.reset();
+    debug_position_srv_.reset();
     joint_state_pub_.reset();
     gimbal_status_pub_.reset();
   }
 
   std::unique_ptr<IGimbalInterface> gimbal_;
   rclcpp::Subscription<vision_servo_msgs::msg::GimbalCmd>::SharedPtr cmd_sub_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr debug_position_srv_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
   rclcpp_lifecycle::LifecyclePublisher<vision_servo_msgs::msg::GimbalStatus>::SharedPtr
     gimbal_status_pub_;

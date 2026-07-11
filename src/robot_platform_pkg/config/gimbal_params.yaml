@@ -15,3 +15,6 @@ gimbal_driver:
     max_pitch_rate: 1.0      # 驱动层最终限幅，单位 rad/s
     status_publish_rate_hz: 10.0
     stop_command_burst_count: 3
+    debug_position_yaw_deg: 5.0       # /gimbal/debug_position 的绝对 yaw 目标角，单位 deg
+    debug_position_pitch_deg: 0.0     # /gimbal/debug_position 的绝对 pitch 目标角，单位 deg
+    debug_position_duration_sec: 0.5  # /gimbal/debug_position 的运动时间，单位 s

@@ -30,6 +30,7 @@
   <depend>vision_servo_msgs</depend>     <!-- GimbalCmd, PlatformState 消息 -->
   <depend>geometry_msgs</depend>         <!-- Twist, Pose, Transform -->
   <depend>sensor_msgs</depend>           <!-- Imu -->
+  <depend>std_srvs</depend>              <!-- Trigger 调试服务 -->
   <depend>nav_msgs</depend>              <!-- Odometry -->
   <depend>tf2_ros</depend>               <!-- TF 坐标变换广播 -->
   <depend>tf2_geometry_msgs</depend>

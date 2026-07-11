@@ -149,10 +149,26 @@ public:
   }
 
   void home() override {
-    if (!connected_) return;
-    auto frame = dji_rs2::build_position_command(0, 0, 0, 500, position_ctrl_byte_);
-    sendFrame(frame);
+    sendPositionCommand(0.0f, 0.0f, 0.5f);
     std::cout << "[DJIRS2Gimbal] 回中指令已发送" << std::endl;
+  }
+
+  void sendPositionCommand(float yaw, float pitch, float duration_sec) override {
+    if (!connected_) return;
+
+    constexpr double RAD2TENTH_DEG = 1800.0 / M_PI;
+    const auto yaw_tenth = static_cast<int16_t>(
+      std::clamp(std::lround(static_cast<double>(yaw) * RAD2TENTH_DEG), -1800L, 1800L));
+    const auto pitch_tenth = static_cast<int16_t>(
+      std::clamp(std::lround(static_cast<double>(pitch) * RAD2TENTH_DEG), -1800L, 1800L));
+    const auto time_ms = static_cast<uint16_t>(
+      std::clamp(std::lround(static_cast<double>(duration_sec) * 1000.0), 100L, 10000L));
+
+    auto frame = dji_rs2::build_position_command(
+      yaw_tenth, 0, pitch_tenth, time_ms, position_ctrl_byte_);
+    sendFrame(frame);
+    std::cout << "[DJIRS2Gimbal] 位置指令已发送 yaw=" << yaw_tenth
+              << " pitch=" << pitch_tenth << " time_ms=" << time_ms << std::endl;
   }
 
   void emergencyStop() override {
@@ -488,6 +504,17 @@ public:
     yaw_rate_ = 0.0f;
     pitch_rate_ = 0.0f;
     last_update_ = Clock::now();
+  }
+
+  void sendPositionCommand(float yaw, float pitch, float duration_sec) override {
+    (void)duration_sec;
+    std::lock_guard<std::mutex> lock(mutex_);
+    integrate_locked();
+    yaw_ = clamp(yaw, -yaw_limit_, yaw_limit_);
+    pitch_ = clamp(pitch, -pitch_limit_, pitch_limit_);
+    yaw_rate_ = 0.0f;
+    pitch_rate_ = 0.0f;
+    tx_count_++;
   }
 
   void emergencyStop() override {

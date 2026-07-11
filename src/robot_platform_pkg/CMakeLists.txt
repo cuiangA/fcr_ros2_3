@@ -33,6 +33,7 @@ find_package(rclcpp_components REQUIRED)
 find_package(vision_servo_msgs REQUIRED)   # GimbalCmd, PlatformState
 find_package(geometry_msgs REQUIRED)        # Twist, Pose, Transform
 find_package(sensor_msgs REQUIRED)          # Imu, Image
+find_package(std_srvs REQUIRED)             # Trigger debug services
 find_package(nav_msgs REQUIRED)             # Odometry
 find_package(tf2_ros REQUIRED)              # TF 广播
 find_package(tf2_geometry_msgs REQUIRED)
@@ -62,7 +63,7 @@ add_executable(gimbal_driver_node src/gimbal_driver_node.cpp src/gimbal_interfac
   src/dji_rs2_protocol.cpp)
 target_include_directories(gimbal_driver_node PRIVATE include)
 ament_target_dependencies(gimbal_driver_node
-  rclcpp rclcpp_lifecycle vision_servo_msgs sensor_msgs
+  rclcpp rclcpp_lifecycle vision_servo_msgs sensor_msgs std_srvs
 )
 target_link_libraries(gimbal_driver_node platform_qos)
 install(TARGETS gimbal_driver_node DESTINATION lib/${PROJECT_NAME})
