@@ -18,6 +18,7 @@
 #include <vision_servo_msgs/msg/target_array.hpp>
 #include <image_transport/image_transport.hpp>
 #include <opencv2/opencv.hpp>
+#include "perception_pkg/yolo_inference.hpp"
 #include <memory>
 #include <string>
 

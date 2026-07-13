@@ -35,6 +35,7 @@
 #include "perception_pkg/detection_node.hpp"
 #include "perception_pkg/tracking_node.hpp"
 #include "perception_pkg/depth_estimator.hpp"
+#include "perception_pkg/yolo_inference.hpp"
 
 namespace perception_pkg {
 

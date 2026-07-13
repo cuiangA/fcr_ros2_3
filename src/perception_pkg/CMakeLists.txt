@@ -42,7 +42,7 @@ target_include_directories(perception_qos INTERFACE include)
 target_link_libraries(perception_qos INTERFACE rclcpp::rclcpp)
 
 # ── 检测节点（独立可执行文件） ────────────────────────────────────
-add_executable(detection_node src/detection_node.cpp)
+add_executable(detection_node src/detection_node.cpp src/yolo_inference.cpp)
 target_include_directories(detection_node PRIVATE include)
 ament_target_dependencies(detection_node
   rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge image_transport OpenCV
