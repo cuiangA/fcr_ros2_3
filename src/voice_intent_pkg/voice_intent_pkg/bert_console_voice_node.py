@@ -16,7 +16,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
 from rclpy.qos import ReliabilityPolicy
 from std_msgs.msg import String
 
-from voice_intent_pkg.intent_rules import resolve_gimbal_intent
+from voice_intent_pkg.intent_rules import is_explicit_gimbal_home, resolve_control_intent
 
 
 DEFAULT_LABEL_INTENTS = [
@@ -299,15 +299,16 @@ class BertConsoleVoiceNode(Node):
         control_confidence = confidence
         control_source = "none"
         if self._enable_gimbal_rules:
-            control_intent = resolve_gimbal_intent(text)
+            control_intent = resolve_control_intent(text)
             if control_intent is not None:
                 control_confidence = 1.0
                 control_source = "gimbal_rule"
 
         if control_intent is None and bert_intent != "chat":
             if confidence >= self._min_confidence and margin >= self._min_margin:
-                control_intent = bert_intent
-                control_source = "bert"
+                if bert_intent != "gimbal_home" or is_explicit_gimbal_home(text):
+                    control_intent = bert_intent
+                    control_source = "bert"
 
         accepted = control_intent is not None
         if accepted:
