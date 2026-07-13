@@ -127,8 +127,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "right_yaw_sign",
-            default_value="-1.0",
-            description="向右一点对应的 yaw 方向符号，实机方向反了改为 1.0",
+            default_value="1.0",
+            description="向右一点对应的 yaw 方向符号，实机方向反了改为 -1.0",
         ),
         DeclareLaunchArgument(
             "up_pitch_sign",

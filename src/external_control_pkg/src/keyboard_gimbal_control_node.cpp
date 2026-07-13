@@ -38,7 +38,7 @@ public:
     declare_parameter("step_duration_sec", 0.18);
     declare_parameter("yaw_step_rate", 0.35);
     declare_parameter("pitch_step_rate", 0.25);
-    declare_parameter("right_yaw_sign", -1.0);
+    declare_parameter("right_yaw_sign", 1.0);
     declare_parameter("up_pitch_sign", 1.0);
     declare_parameter("frame_id", "gimbal_link");
 
@@ -229,7 +229,7 @@ private:
   double step_duration_sec_ = 0.18;
   double yaw_step_rate_ = 0.35;
   double pitch_step_rate_ = 0.25;
-  double right_yaw_sign_ = -1.0;
+  double right_yaw_sign_ = 1.0;
   double up_pitch_sign_ = 1.0;
   bool motion_active_ = false;
   double active_yaw_rate_ = 0.0;

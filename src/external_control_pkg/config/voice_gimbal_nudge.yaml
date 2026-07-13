@@ -7,7 +7,7 @@ voice_gimbal_nudge_node:
     yaw_step_rate: 0.25
     pitch_step_rate: 0.20
     min_confidence: 0.5
-    right_yaw_sign: -1.0
+    right_yaw_sign: 1.0
     up_pitch_sign: 1.0
     speed_scale_step: 0.2
     frame_id: "gimbal_link"

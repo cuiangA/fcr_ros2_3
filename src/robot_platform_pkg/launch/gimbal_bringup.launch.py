@@ -61,7 +61,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "control_mode",
             default_value="incremental_position",
-            description="Gimbal command mode: speed or incremental_position.",
+            description="Gimbal command mode: speed or native incremental_position.",
         ),
         gimbal_node,
     ])

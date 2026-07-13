@@ -213,6 +213,12 @@ class BertConsoleVoiceNode(Node):
             except (EOFError, KeyboardInterrupt):
                 self._input_queue.put(None)
                 return
+            except UnicodeDecodeError as exc:
+                self.get_logger().warning(
+                    "终端输入不是有效的 UTF-8，已忽略本行，请重新输入: "
+                    f"{exc}",
+                )
+                continue
 
             if text in {":q", ":quit", ":exit"}:
                 self._input_queue.put(None)
