@@ -320,7 +320,6 @@ private:
 
     if (cmd.hold_yaw && cmd.hold_pitch) {
       last_incremental_cmd_time_ = now_time;
-      sync_position_target_to_current();
       return;
     }
 
@@ -483,7 +482,6 @@ private:
 
     if (control_mode_ == ControlMode::IncrementalPosition) {
       last_incremental_cmd_time_ = now();
-      sync_position_target_to_current();
       has_active_cmd_ = false;
       return;
     }
