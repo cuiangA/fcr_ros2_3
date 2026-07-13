@@ -81,14 +81,10 @@ void DetectionNode::image_callback(const sensor_msgs::msg::Image::ConstSharedPtr
 }
 
 vision_servo_msgs::msg::TargetArray DetectionNode::infer(const cv::Mat& frame) {
-  (void)frame;
-  vision_servo_msgs::msg::TargetArray result;
-  // [占位] 实际 YOLO 推理流程：
-  //   1. 预处理：resize + normalize（将图像缩放到模型输入尺寸并归一化）
-  //   2. 前向传递：通过 ONNX Runtime 或 OpenCV DNN 执行推理
-  //   3. 后处理：NMS 过滤重叠框 + 缩放回原图尺寸
-  //   4. 填充 TargetArray（边界框、中心点、类别名称、置信度）
-  return result;
+  if (!yolo_) {
+    return vision_servo_msgs::msg::TargetArray{};
+  }
+  return yolo_->detect(frame);
 }
 
 }  // namespace perception_pkg

@@ -92,6 +92,7 @@ private:
 
   // ── 管线组件（进程内） ──────────────────────────────────────────
   std::unique_ptr<MultiObjectTracker> tracker_; ///< 卡尔曼滤波多目标跟踪器
+  std::unique_ptr<YoloInference> yolo_;         ///< YOLOv8 推理封装
   int active_tracking_id_;                      ///< 当前活跃的跟踪目标 ID（-1=未选中）
 
   // ── 相机标定状态 ────────────────────────────────────────────────

@@ -98,7 +98,14 @@ void PerceptionPipeline::image_callback(
   vision_servo_msgs::msg::TargetArray detections;
   detections.header = msg->header;
   detections.header.frame_id = camera_frame_;
-  // [YOLO 推理占位]
+  try {
+    cv::Mat frame = cv_bridge::toCvShare(msg, "bgr8")->image;
+    if (yolo_) {
+      detections = yolo_->detect(frame);
+    }
+  } catch (const cv_bridge::Exception& e) {
+    RCLCPP_ERROR(get_logger(), "cv_bridge 转换失败: %s", e.what());
+  }
   det_pub_->publish(detections);
 
   // ── 阶段 2：跟踪 ────────────────────────────────────────────────

@@ -52,6 +52,9 @@ private:
 
   // ── 预分配缓冲区（避免每次推理时重新分配内存） ─────────────────
   cv::Mat preprocess_buffer_;
+
+  // ── YOLOv8 推理封装（OpenCV DNN 后端） ────────────────────────
+  std::unique_ptr<YoloInference> yolo_;
 };
 
 }  // namespace perception_pkg
