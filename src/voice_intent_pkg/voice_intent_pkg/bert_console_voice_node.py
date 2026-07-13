@@ -209,14 +209,30 @@ class BertConsoleVoiceNode(Node):
     def _console_loop(self) -> None:
         while rclpy.ok():
             try:
-                text = input("BERT> ").strip()
+                sys.stdout.write("BERT> ")
+                sys.stdout.flush()
+                raw_input = sys.stdin.buffer.readline()
             except (EOFError, KeyboardInterrupt):
                 self._input_queue.put(None)
                 return
-            except UnicodeDecodeError as exc:
+
+            if not raw_input:
+                self._input_queue.put(None)
+                return
+
+            text = None
+            decode_errors = []
+            for encoding in ("utf-8", "gb18030"):
+                try:
+                    text = raw_input.decode(encoding).strip()
+                    break
+                except UnicodeDecodeError as exc:
+                    decode_errors.append(f"{encoding}: {exc}")
+
+            if text is None:
                 self.get_logger().warning(
-                    "终端输入不是有效的 UTF-8，已忽略本行，请重新输入: "
-                    f"{exc}",
+                    "终端输入无法按 UTF-8 或 GB18030 解码，已忽略本行: "
+                    + "; ".join(decode_errors),
                 )
                 continue
 
