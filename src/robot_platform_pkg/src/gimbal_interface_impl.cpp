@@ -444,6 +444,8 @@ private:
       last_state_update_time_ = now;
       has_state_sample_ = true;
       has_pending_query_seq_ = false;
+    } else {
+      parse_error_count_++;
     }
   }
 

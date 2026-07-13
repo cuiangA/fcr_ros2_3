@@ -30,6 +30,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)           # Header 消息
+find_package(std_srvs REQUIRED)           # Trigger 云台服务
 find_package(vision_servo_msgs REQUIRED)  # GimbalCmd
 
 # ── 依赖声明（系统库） ───────────────────────────────────────────────
@@ -140,7 +141,7 @@ add_executable(voice_gimbal_nudge_node
 )
 
 ament_target_dependencies(voice_gimbal_nudge_node
-  rclcpp std_msgs vision_servo_msgs
+  rclcpp std_msgs std_srvs vision_servo_msgs
 )
 
 target_link_libraries(voice_gimbal_nudge_node
@@ -155,7 +156,7 @@ add_executable(command_router_node
 )
 
 ament_target_dependencies(command_router_node
-  rclcpp std_msgs vision_servo_msgs
+  rclcpp std_msgs std_srvs vision_servo_msgs
 )
 
 list(APPEND EXTERNAL_CONTROL_TARGETS command_router_node)

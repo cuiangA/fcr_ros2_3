@@ -238,7 +238,6 @@ std::vector<uint8_t> build_query_position_command() {
 
 bool parse_position_response(const std::vector<uint8_t>& frame,
                              int16_t& yaw, int16_t& roll, int16_t& pitch) {
-    // Frame must be large enough for data[14:20] = yaw, roll, pitch.
     if (frame.size() < 20) return false;
 
     uint8_t cmd_type = frame[3];
@@ -248,14 +247,28 @@ bool parse_position_response(const std::vector<uint8_t>& frame,
         uint8_t cmd_id   = frame[13];
         if (cmd_set != CMD_SET || cmd_id != CMD_ID_QUERY)
             return false;
+        // Command/notification layout: data starts directly at byte 14.
+        yaw   = static_cast<int16_t>(frame[14] | (frame[15] << 8));
+        roll  = static_cast<int16_t>(frame[16] | (frame[17] << 8));
+        pitch = static_cast<int16_t>(frame[18] | (frame[19] << 8));
+        return true;
     } else if (cmd_type != RSP_TYPE) {
         return false;
     }
 
-    // data[14:20] = yaw(2), roll(2), pitch(2) — little-endian int16
-    yaw   = static_cast<int16_t>(frame[14] | (frame[15] << 8));
-    roll  = static_cast<int16_t>(frame[16] | (frame[17] << 8));
-    pitch = static_cast<int16_t>(frame[18] | (frame[19] << 8));
+    // RS2 query response observed on CAN:
+    // [12]=0x0E, [13]=0x02, [14]=result, [15]=angle type,
+    // [16:18]=yaw, [18:20]=roll, [20:22]=pitch.
+    if (frame.size() < 22 || frame[12] != CMD_SET || frame[13] != CMD_ID_QUERY) {
+        return false;
+    }
+    if (frame[14] != 0x00 || (frame[15] != 0x01 && frame[15] != 0x02)) {
+        return false;
+    }
+
+    yaw   = static_cast<int16_t>(frame[16] | (frame[17] << 8));
+    roll  = static_cast<int16_t>(frame[18] | (frame[19] << 8));
+    pitch = static_cast<int16_t>(frame[20] | (frame[21] << 8));
     return true;
 }
 

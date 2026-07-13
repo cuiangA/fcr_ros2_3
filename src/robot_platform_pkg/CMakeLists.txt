@@ -105,4 +105,13 @@ install(DIRECTORY include/ DESTINATION include)
 # ── 启动文件和配置 ────────────────────────────────────────────────
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_dji_rs2_protocol
+    test/test_dji_rs2_protocol.cpp
+    src/dji_rs2_protocol.cpp
+  )
+  target_include_directories(test_dji_rs2_protocol PRIVATE include)
+endif()
+
 ament_package()

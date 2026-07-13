@@ -8,6 +8,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
 
 #include <algorithm>
@@ -27,6 +28,8 @@ public:
     declare_parameter("autonomy_cmd_topic", "/autonomy/cmd_gimbal");
     declare_parameter("output_cmd_topic", "/cmd_gimbal");
     declare_parameter("estop_topic", "/e_stop");
+    declare_parameter("voice_home_service", "/voice/gimbal_home");
+    declare_parameter("driver_home_service", "/gimbal/home");
     declare_parameter("publish_rate_hz", 50.0);
     declare_parameter("manual_timeout_sec", 0.35);
     declare_parameter("voice_timeout_sec", 0.8);
@@ -69,6 +72,16 @@ public:
 
     output_pub_ = create_publisher<vision_servo_msgs::msg::GimbalCmd>(
       get_parameter("output_cmd_topic").as_string(), reliable_qos);
+
+    driver_home_client_ = create_client<std_srvs::srv::Trigger>(
+      get_parameter("driver_home_service").as_string());
+    voice_home_srv_ = create_service<std_srvs::srv::Trigger>(
+      get_parameter("voice_home_service").as_string(),
+      std::bind(
+        &CommandRouterNode::handleVoiceHome,
+        this,
+        std::placeholders::_1,
+        std::placeholders::_2));
 
     const double rate = std::max(1.0, get_parameter("publish_rate_hz").as_double());
     timer_ = create_wall_timer(
@@ -145,6 +158,56 @@ private:
     output_pub_->publish(command);
   }
 
+  void handleVoiceHome(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  {
+    (void)request;
+    const auto now_time = now();
+
+    if (estop_active_) {
+      response->success = false;
+      response->message = "rejected: emergency stop is active";
+      return;
+    }
+    if (isFresh(manual_, now_time)) {
+      response->success = false;
+      response->message = "rejected: manual control has priority";
+      return;
+    }
+    if (!driver_home_client_->service_is_ready()) {
+      response->success = false;
+      response->message = "rejected: gimbal driver home service unavailable";
+      return;
+    }
+
+    auto stop = vision_servo_msgs::msg::GimbalCmd();
+    stop.header.stamp = now_time;
+    stop.header.frame_id = frame_id_;
+    stop.hold_yaw = true;
+    stop.hold_pitch = true;
+    storeCommand(voice_, stop);
+    output_pub_->publish(stop);
+    last_output_was_stop_ = true;
+
+    auto driver_request = std::make_shared<std_srvs::srv::Trigger::Request>();
+    driver_home_client_->async_send_request(
+      driver_request,
+      [this](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+        const auto driver_response = future.get();
+        if (driver_response->success) {
+          RCLCPP_INFO(get_logger(), "voice gimbal home forwarded to driver");
+        } else {
+          RCLCPP_ERROR(
+            get_logger(), "gimbal driver rejected home: %s",
+            driver_response->message.c_str());
+        }
+      });
+
+    response->success = true;
+    response->message = "accepted: gimbal home forwarded";
+  }
+
   SourceState manual_;
   SourceState voice_;
   SourceState autonomy_;
@@ -157,6 +220,8 @@ private:
   rclcpp::Subscription<vision_servo_msgs::msg::GimbalCmd>::SharedPtr autonomy_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr estop_sub_;
   rclcpp::Publisher<vision_servo_msgs::msg::GimbalCmd>::SharedPtr output_pub_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr voice_home_srv_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr driver_home_client_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

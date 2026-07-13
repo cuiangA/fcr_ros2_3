@@ -78,7 +78,8 @@ std::vector<uint8_t> build_query_position_command();
 
 /**
  * Parse a received protocol frame for position data.
- * Handles response frames (cmd_type=0x20) where cmd_set=0x0E, cmd_id=0x02.
+ * Handles RS2 query responses including result and angle-type bytes before
+ * the yaw/roll/pitch payload.
  *
  * @param frame   complete received frame (already CRC-validated)
  * @param yaw     [out] yaw angle   [0.1 deg]

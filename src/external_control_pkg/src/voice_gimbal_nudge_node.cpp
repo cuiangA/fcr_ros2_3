@@ -9,6 +9,7 @@
 
 #include "external_control_pkg/msg/voice_command.hpp"
 #include <rclcpp/rclcpp.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
 
 #include <algorithm>
@@ -29,6 +30,7 @@ public:
   {
     declare_parameter("voice_command_topic", "/external/voice_command");
     declare_parameter("cmd_gimbal_topic", "/voice/cmd_gimbal");
+    declare_parameter("gimbal_home_service", "/voice/gimbal_home");
     declare_parameter("publish_rate_hz", 20.0);
     declare_parameter("step_duration_sec", 0.4);
     declare_parameter("yaw_step_rate", 0.25);
@@ -41,6 +43,7 @@ public:
 
     voice_command_topic_ = get_parameter("voice_command_topic").as_string();
     cmd_gimbal_topic_ = get_parameter("cmd_gimbal_topic").as_string();
+    gimbal_home_service_ = get_parameter("gimbal_home_service").as_string();
     publish_rate_hz_ = std::max(1.0, get_parameter("publish_rate_hz").as_double());
     step_duration_sec_ = std::max(0.05, get_parameter("step_duration_sec").as_double());
     yaw_step_rate_ = std::abs(get_parameter("yaw_step_rate").as_double());
@@ -58,6 +61,7 @@ public:
 
     gimbal_pub_ = create_publisher<vision_servo_msgs::msg::GimbalCmd>(
       cmd_gimbal_topic_, reliable_qos);
+    home_client_ = create_client<std_srvs::srv::Trigger>(gimbal_home_service_);
 
     timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / publish_rate_hz_),
@@ -84,6 +88,7 @@ private:
     STOP,
     SPEED_UP,
     SPEED_DOWN,
+    HOME,
   };
 
   void voiceCallback(
@@ -98,6 +103,11 @@ private:
       motion_active_ = false;
       publishStop();
       RCLCPP_INFO(get_logger(), "voice gimbal stop | raw=\"%s\"", msg->raw_text.c_str());
+      return;
+    }
+
+    if (direction == NudgeDirection::HOME) {
+      requestHome(msg->raw_text);
       return;
     }
 
@@ -155,6 +165,9 @@ private:
     if (hasIntent(msg, {"gimbal_stop", "stop_gimbal", "stop"})) {
       return NudgeDirection::STOP;
     }
+    if (hasIntent(msg, {"gimbal_home", "home_gimbal"})) {
+      return NudgeDirection::HOME;
+    }
     if (hasIntent(msg, {"gimbal_nudge_right", "gimbal_right", "turn_gimbal_right"})) {
       return NudgeDirection::RIGHT;
     }
@@ -178,16 +191,27 @@ private:
     if (containsAny(text, {"停止", "停一下", "别动"})) {
       return NudgeDirection::STOP;
     }
-    if (containsAny(text, {"向右一点", "向右一下", "右转一点", "右移一点", "往右一点"})) {
+    if (containsAny(text, {"云台回中", "云台归位", "镜头回正", "回到中间"})) {
+      return NudgeDirection::HOME;
+    }
+    if (containsAny(text, {
+        "向右一点", "向右一下", "右转一点", "右移一点", "往右一点",
+        "向右移动一点", "往右移动一点", "向右转一点", "往右转一点"})) {
       return NudgeDirection::RIGHT;
     }
-    if (containsAny(text, {"向左一点", "向左一下", "左转一点", "左移一点", "往左一点"})) {
+    if (containsAny(text, {
+        "向左一点", "向左一下", "左转一点", "左移一点", "往左一点",
+        "向左移动一点", "往左移动一点", "向左转一点", "往左转一点"})) {
       return NudgeDirection::LEFT;
     }
-    if (containsAny(text, {"向上一点", "向上一下", "抬高一点", "往上一点", "上移一点"})) {
+    if (containsAny(text, {
+        "向上一点", "向上一下", "抬高一点", "往上一点", "上移一点",
+        "向上移动一点", "往上移动一点"})) {
       return NudgeDirection::UP;
     }
-    if (containsAny(text, {"向下一点", "向下一下", "降低一点", "往下一点", "下移一点"})) {
+    if (containsAny(text, {
+        "向下一点", "向下一下", "降低一点", "往下一点", "下移一点",
+        "向下移动一点", "往下移动一点"})) {
       return NudgeDirection::DOWN;
     }
     if (containsAny(text, {"快一点", "速度快一点", "快一些"})) {
@@ -268,16 +292,43 @@ private:
     gimbal_pub_->publish(cmd);
   }
 
+  void requestHome(const std::string& raw_text) {
+    motion_active_ = false;
+    publishStop();
+
+    if (!home_client_->service_is_ready()) {
+      RCLCPP_WARN(
+        get_logger(), "gimbal home service unavailable: %s",
+        gimbal_home_service_.c_str());
+      return;
+    }
+
+    auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
+    home_client_->async_send_request(
+      request,
+      [this, raw_text](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+        const auto response = future.get();
+        if (response->success) {
+          RCLCPP_INFO(get_logger(), "voice gimbal home | raw=\"%s\"", raw_text.c_str());
+        } else {
+          RCLCPP_ERROR(
+            get_logger(), "voice gimbal home failed: %s", response->message.c_str());
+        }
+      });
+  }
+
   static double sign(double value) {
     return value >= 0.0 ? 1.0 : -1.0;
   }
 
   rclcpp::Subscription<external_control_pkg::msg::VoiceCommand>::SharedPtr voice_sub_;
   rclcpp::Publisher<vision_servo_msgs::msg::GimbalCmd>::SharedPtr gimbal_pub_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr home_client_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   std::string voice_command_topic_;
   std::string cmd_gimbal_topic_;
+  std::string gimbal_home_service_;
   std::string frame_id_;
   double publish_rate_hz_ = 20.0;
   double step_duration_sec_ = 0.4;

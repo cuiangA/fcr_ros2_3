@@ -97,6 +97,14 @@ public:
           std::placeholders::_1,
           std::placeholders::_2));
 
+      home_srv_ = create_service<std_srvs::srv::Trigger>(
+        "/gimbal/home",
+        std::bind(
+          &GimbalDriverNode::home_callback,
+          this,
+          std::placeholders::_1,
+          std::placeholders::_2));
+
       last_cmd_time_ = now();
       last_status_pub_time_ = now();
       has_active_cmd_ = false;
@@ -291,6 +299,28 @@ private:
       get_logger(),
       "已发送位置调试指令 yaw=%.2f deg, pitch=%.2f deg, duration=%.2f s",
       yaw_deg, pitch_deg, duration_sec);
+  }
+
+  void home_callback(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  {
+    (void)request;
+
+    if (!is_active_state() || !gimbal_) {
+      response->success = false;
+      response->message = "gimbal_driver is not active";
+      return;
+    }
+
+    send_stop_command();
+    gimbal_->home();
+    last_cmd_time_ = now();
+    last_incremental_cmd_time_ = now();
+    has_active_cmd_ = false;
+    response->success = true;
+    response->message = "gimbal home command sent";
+    RCLCPP_INFO(get_logger(), "云台回中指令已发送");
   }
 
   /// 云台指令回调。只有 Active 状态才会真正转发给硬件。
@@ -502,6 +532,7 @@ private:
     }
     cmd_sub_.reset();
     debug_position_srv_.reset();
+    home_srv_.reset();
     joint_state_pub_.reset();
     gimbal_status_pub_.reset();
   }
@@ -509,6 +540,7 @@ private:
   std::unique_ptr<IGimbalInterface> gimbal_;
   rclcpp::Subscription<vision_servo_msgs::msg::GimbalCmd>::SharedPtr cmd_sub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr debug_position_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr home_srv_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
   rclcpp_lifecycle::LifecyclePublisher<vision_servo_msgs::msg::GimbalStatus>::SharedPtr
     gimbal_status_pub_;

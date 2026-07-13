@@ -36,6 +36,8 @@
   <depend>tf2_geometry_msgs</depend>
   <depend>eigen</depend>                <!-- 线性代数库（运动学、里程计） -->
 
+  <test_depend>ament_cmake_gtest</test_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>
