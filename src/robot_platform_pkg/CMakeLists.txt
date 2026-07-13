@@ -50,7 +50,11 @@ target_include_directories(three_wheel_kinematics INTERFACE include)
 target_link_libraries(three_wheel_kinematics INTERFACE Eigen3::Eigen)
 
 # ── 底盘驱动节点 ──────────────────────────────────────────────────
-add_executable(chassis_driver_node src/chassis_driver_node.cpp src/chassis_interface_impl.cpp)
+add_executable(chassis_driver_node
+  src/chassis_driver_node.cpp
+  src/chassis_interface_impl.cpp
+  src/feetech_sts3215_bus.cpp
+)
 target_include_directories(chassis_driver_node PRIVATE include)
 ament_target_dependencies(chassis_driver_node
   rclcpp geometry_msgs nav_msgs

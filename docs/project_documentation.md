@@ -78,10 +78,10 @@ ROS2 架构
 | 技术类别 | 当前进度 | 已具备能力 | 下一步技术路线 |
 | --- | --- | --- | --- |
 | 1. ROS2 系统架构与接口层 | 基本完成 | 6 个 ROS 2 包、自定义 msg/srv/action、QoS 封装、分阶段 launch、YAML 参数体系 | 引入更明确的 Lifecycle/状态机管理，并为运镜 Action 和交互节点继续扩展接口 |
-| 2. 硬件驱动与设备抽象 | 框架完成，实物通信待接入 | 底盘/云台/IMU 抽象接口、Factory Pattern、`use_sim` 实/仿切换、PlatformState 聚合 | 将 LEKIWI/双轮足底盘、RS2、IMU、电池、Sony/奥比中光相机逐步接入真实协议或 SDK |
+| 2. 硬件驱动与设备抽象 | 云台实机链路已打通，底盘/IMU 待接入 | 底盘/云台/IMU 抽象接口、Factory Pattern、`use_sim` 实/仿切换、PlatformState 聚合；RS2 bringup 见 [`rs2_gimbal_bringup.md`](rs2_gimbal_bringup.md) | 继续接入底盘、IMU、电池、Sony/奥比中光相机，并补齐设备诊断 |
 | 3. 图像采集与视觉感知 | 管线完成，检测推理待接入 | `DetectionNode`、`PerceptionPipeline`、图像订阅、检测参数和输出接口 | 实现 YOLO ONNX Runtime/TensorRT 推理，接入 Sony 图像和相机标定数据 |
 | 4. 目标跟踪与状态估计 | 大部分完成 | SORT 风格 Kalman 跟踪、IoU 关联、目标 ID、目标锁定、深度图采样和 bbox 估距 | 增加速度估计滤波、ReID/ByteTrack 增强、tf2 坐标转换和目标重识别策略 |
-| 5. 底盘与云台基础控制 | 仿真可用，实物待接入 | `/cmd_vel`、`GimbalCmd`、三轮全向运动学、云台速度命令、低速限幅和平台反馈接口 | 加入真实底盘/云台通信、手动接管、云台回中和速度档位 |
+| 5. 底盘与云台基础控制 | 云台键盘/语音实机可控，底盘待接入 | `/cmd_vel`、`GimbalCmd`、三轮全向运动学、云台绝对位置累加控制、低速限幅和平台反馈接口 | 固化云台限位和诊断，继续接入真实底盘、手动接管和速度档位 |
 | 6. 视觉伺服与跟随控制 | 核心完成 | MVP P 控制、IBVS、PBVS、50Hz ServoManager、控制分配、Action feedback | 补齐自动构图模板、HYBRID 模式、TF 驱动分配和实机闭环参数整定 |
 | 7. 优化控制与高级协同 | 接口预留 | MPC/RL 头文件、ControlAllocator 优化模式设想 | 接入 OSQP/qpOASES，实现 MPC 控制器和 QP 控制分配 |
 | 8. 任务规划与运镜 Action | 基础 Action 已有 | `VisualServo.action` 可表达长周期伺服任务 | 扩展推近、拉远、环绕、侧向跟拍等 Cinematic Action 和轨迹生成器 |
@@ -214,7 +214,8 @@ DriverNode
 
 - 命令入口统一为 `GimbalCmd`。
 - 控制量为 yaw/pitch 角速度，也可扩展 position hold 和回中命令。
-- DJI RS2 使用 CAN 或官方可用接口封装。
+- DJI RS2 当前通过 SocketCAN `can0` 封装，host -> gimbal 使用 `0x223`，gimbal -> host 使用 `0x222`。
+- 实机已验证 `0E 00` 绝对位置控制可用；`0E 01` 速度控制暂未执行，当前驱动采用“速度输入 -> 绝对目标角累加 -> 绝对位置帧”的工程方案。
 - 云台状态反馈包括 yaw、pitch、yaw_rate、pitch_rate、回中状态和限位状态。
 - 云台回中策略既可作为基础控制功能，也可作为高级构图和 MPC 的约束条件。
 
@@ -381,7 +382,8 @@ Z = depth
 云台基础控制：
 
 - 输入接口使用 `GimbalCmd`。
-- 支持 yaw/pitch 角速度控制。
+- 上层接口仍使用 yaw/pitch 角速度输入。
+- RS2 实机当前采用驱动内部积分为绝对位置目标，再发送 `0E 00` 绝对位置控制帧执行。
 - 支持 `hold_yaw` 和 `hold_pitch`。
 - 支持回中服务或回中 Action。
 - 云台姿态进入 `PlatformState`，供自动跟随和构图控制使用。

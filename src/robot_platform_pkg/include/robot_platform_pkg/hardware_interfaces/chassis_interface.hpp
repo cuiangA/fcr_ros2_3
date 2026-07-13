@@ -20,6 +20,15 @@
 
 namespace robot_platform_pkg {
 
+struct LekiwiChassisConfig {
+  int left_wheel_id{7};
+  int back_wheel_id{8};
+  int right_wheel_id{9};
+  double wheel_radius{0.05};
+  double base_radius{0.125};
+  int max_raw_velocity{3000};
+};
+
 class IChassisInterface {
 public:
   virtual ~IChassisInterface() = default;
@@ -54,7 +63,8 @@ public:
 // ── 工厂函数 ──────────────────────────────────────────────────────
 
 /// 创建真实 LEKIWI 底盘接口（串口通信）
-std::unique_ptr<IChassisInterface> make_lekiwi_chassis();
+std::unique_ptr<IChassisInterface> make_lekiwi_chassis(
+  const LekiwiChassisConfig& config = LekiwiChassisConfig{});
 
 /// 创建仿真的底盘接口（用于测试和开发）
 std::unique_ptr<IChassisInterface> make_simulated_chassis();

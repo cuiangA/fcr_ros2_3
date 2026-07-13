@@ -30,3 +30,5 @@ perception_doc/
 ##project_documentation.md
 project_documentation.md
 bags/
+classifier/bert_intent_output/model.safetensors
+classifier/bert_intent_output/training_args.bin

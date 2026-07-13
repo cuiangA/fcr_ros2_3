@@ -512,7 +512,7 @@ B 组给 vibe coder 的阅读提示词：
 | 平台 launch | 已完成/可运行 | `platform.launch.py` 能启动底盘、云台、IMU、里程计、平台管理节点 |
 | 三轮全向运动学 | 已完成/可运行 | 已有运动学头文件，可作为底盘速度和轮速转换基础 |
 | 底盘 driver 节点 | 框架完成 | 订阅 `/cmd_vel`，支持 `use_sim`；真实 LEKIWI 串口通信仍是 TODO |
-| 云台 driver 节点 | 框架完成 | 订阅 `/cmd_gimbal`，支持 `use_sim`；真实 DJI RS2 CAN 通信仍是 TODO |
+| 云台 driver 节点 | 实机链路已打通 | 订阅 `/cmd_gimbal`，支持 `use_sim`；真实 DJI RS2 通过 SocketCAN `can0` 可状态读取和键盘/语音控制，详见 [`rs2_gimbal_bringup.md`](rs2_gimbal_bringup.md) |
 | IMU driver 节点 | 框架完成 | 发布 `/imu/data`，支持 `use_sim`；真实 BNO055 I2C 通信仍是 TODO |
 | 里程计节点 | 已完成/可运行 | 订阅 `/chassis/odom_raw` 和 `/imu/data`，统一发布 `/odom` 和 TF |
 | PlatformManager | 已完成/可运行 | 聚合 `/odom`、`/imu/data`、`/joint_states` 到 `/platform/state` |
