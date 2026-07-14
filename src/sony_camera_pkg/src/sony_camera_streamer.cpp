@@ -194,7 +194,7 @@ bool SonyCameraStreamer::connect(int camera_index) {
   impl_ = std::make_unique<Impl>(&connected_);
   impl_->callback.model_id = info->GetModel();
 
-  CrDeviceHandle handle = 0;
+  SDK::CrDeviceHandle handle = 0;
   err = SDK::Connect(info, &impl_->callback, &handle, SDK::CrSdkControlMode_Remote,
                      SDK::CrReconnecting_ON);
 
@@ -248,7 +248,7 @@ bool SonyCameraStreamer::disconnect() {
   }
 
   std::cout << "[SonyCamera] Disconnecting..." << std::endl;
-  auto handle = static_cast<CrDeviceHandle>(device_handle_);
+  auto handle = static_cast<SDK::CrDeviceHandle>(device_handle_);
 
   if (impl_) {
     impl_->callback.disconnect_requested = true;
@@ -304,7 +304,7 @@ bool SonyCameraStreamer::startStreaming(FrameCallback callback) {
   impl_->stream_stop = false;
 
   impl_->stream_thread = std::thread([this]() {
-    auto handle = static_cast<CrDeviceHandle>(device_handle_);
+    auto handle = static_cast<SDK::CrDeviceHandle>(device_handle_);
 
     while (!impl_->stream_stop && impl_->callback.connected) {
       CrInt32 num = 0;
