@@ -187,7 +187,7 @@ bool SonyCameraStreamer::connect(int camera_index) {
     return false;
   }
 
-  auto* info = enum_info->GetCameraObjectInfo(camera_index - 1);
+  const SDK::ICrCameraObjectInfo* info = enum_info->GetCameraObjectInfo(camera_index - 1);
   std::cout << "[SonyCamera] Connecting to " << info->GetModel() << " ("
             << info->GetConnectionTypeName() << ")..." << std::endl;
 
@@ -195,8 +195,8 @@ bool SonyCameraStreamer::connect(int camera_index) {
   impl_->callback.model_id = info->GetModel();
 
   SDK::CrDeviceHandle handle = 0;
-  err = SDK::Connect(info, &impl_->callback, &handle, SDK::CrSdkControlMode_Remote,
-                     SDK::CrReconnecting_ON);
+  err = SDK::Connect(const_cast<SDK::ICrCameraObjectInfo*>(info), &impl_->callback,
+                     &handle, SDK::CrSdkControlMode_Remote, SDK::CrReconnecting_ON);
 
   enum_info->Release();
 
