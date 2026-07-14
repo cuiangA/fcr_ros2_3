@@ -10,12 +10,15 @@ system:
 
 # ── 感知子系统 ──────────────────────────────────────────────
 perception:
-  model_path: "/models/yolov8n.onnx"  # YOLOv8 模型文件路径
+  model_name: "yolov8n.onnx"          # 由 launch 从 perception_pkg/models 解析
+  detection_device: "cpu"             # OpenCV后端；Jetson生产环境改用TensorRT后端
   confidence_threshold: 0.5           # 检测置信度阈值（低于此值的检测结果被丢弃）
-  use_composition: true               # 启用进程内组件模式，零拷贝传输图像
+  enable_detection: true
+  enable_tracking: true
 
 # ── 伺服控制子系统 ─────────────────────────────────────────
 servo:
+  enable: false          # 融合前无有效3D目标源，禁止默认启动控制闭环
   controller_plugin: "servo_control_pkg::IBVSController"  # 默认控制器插件（IBVS）
   allocation_ratio: 0.5   # 底盘 vs 云台的运动分配比例（0=纯云台，1=纯底盘）
   lambda_gain: 0.5        # IBVS 控制增益 λ（指数收敛速率）

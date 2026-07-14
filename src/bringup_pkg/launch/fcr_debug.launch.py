@@ -13,13 +13,15 @@ FCR 调试/开发启动文件。
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     # 日志级别：debug / info / warn / error
     debug_level = LaunchConfiguration("debug_level")
+    perception_share = FindPackageShare("perception_pkg")
 
     # 各子系统节点独立启动，便于隔离调试
     nodes = [
@@ -45,11 +47,30 @@ def generate_launch_description():
 
         # ── 感知子系统 ───────────────────────────────────────
         Node(package="perception_pkg", executable="detection_node",
-             name="detection", output="screen",
+             name="detection_node", output="screen",
+             parameters=[
+                 PathJoinSubstitution(
+                     [perception_share, "config", "detection_params.yaml"]
+                 ),
+                 {
+                     "model_path": PathJoinSubstitution(
+                         [perception_share, "models", "yolov8n.onnx"]
+                     )
+                 },
+             ],
+             remappings=[
+                 ("image", "/sony/image_raw"),
+                 ("detections", "/perception/detections"),
+                 ("debug_image", "/perception/debug_image"),
+             ],
              arguments=["--ros-args", "--log-level", debug_level]),
 
         Node(package="perception_pkg", executable="tracking_node",
-             name="tracking", output="screen",
+             name="tracking_node", output="screen",
+             remappings=[
+                 ("detections", "/perception/detections"),
+                 ("tracks", "/perception/tracks"),
+             ],
              arguments=["--ros-args", "--log-level", debug_level]),
 
         # ── 伺服控制子系统 ───────────────────────────────────

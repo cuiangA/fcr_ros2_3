@@ -19,7 +19,7 @@ Sony 图像输入
   -> 双轮足/移动底盘 + RS2 云台协同运动
 ```
 
-当前代码仓库已经具备 ROS 2 Humble 多包结构、自定义接口、感知管线框架、目标跟踪、深度估计、IBVS/PBVS 控制器、控制分配器、平台抽象层、Gazebo/2D/mock 仿真和 bringup 启动编排。任务划分中的双轮足底盘、Sony 相机、奥比中光 335 深度相机、语音/网页交互和 Action 运镜属于后续产品化与功能扩展目标，当前仓库已有接口和包结构可承载这些方向。
+当前代码仓库已经具备 ROS 2 Humble 多包结构、自定义接口、Sony CRSDK 图像驱动、YOLO ONNX/TensorRT 检测、2D 多目标跟踪、IBVS/PBVS 控制器、控制分配器、平台抽象层、Gazebo/2D/mock 仿真和 bringup 启动编排。Sony 驱动和 2D 感知代码仍待 Jetson 实机验收；奥比中光 335 读取、双相机标定与融合、语音/网页交互和 Action 运镜属于后续阶段。
 
 ## 2. 任务划分总览
 
@@ -56,7 +56,7 @@ ROS2 架构
 | 当前包 | 承载任务类别 | 主要职责 |
 | --- | --- | --- |
 | `vision_servo_msgs` | 1、4、5、6、8 | 定义目标、平台状态、云台命令、伺服状态、模式切换服务和视觉伺服 Action |
-| `perception_pkg` | 3、4 | 图像输入、YOLO 检测框架、多目标跟踪、深度估计、可组合感知管线 |
+| `perception_pkg` | 3、4 | Sony 图像输入、YOLO ONNX 检测、多目标跟踪；深度融合留待后续阶段 |
 | `servo_control_pkg` | 5、6、7、8 | MVP 跟拍、IBVS/PBVS、控制器插件、控制分配、VisualServo Action |
 | `robot_platform_pkg` | 2、5、10 | 底盘、云台、IMU、里程计、平台状态聚合、真实/仿真硬件抽象 |
 | `simulation_pkg` | 3、4、5、6、10 | Gazebo 模型、目标仿真、相机仿真、mock 检测、2D 闭环仿真 |
@@ -64,11 +64,11 @@ ROS2 架构
 
 ### 3.1 当前项目进度
 
-按照当前 README、源码和配置文件的状态，项目处于 V2.5 阶段：MVP 跟拍闭环、滤波/死区/限幅、目标管理、IBVS/PBVS 控制器和控制分配框架已经具备；真实 YOLO 推理、真实硬件通信、MPC/QP、运镜 Action 和上层交互还处于后续扩展阶段。
+按照当前 README、源码和配置文件的状态，项目处于 V2.5 阶段：MVP 跟拍闭环、滤波/死区/限幅、目标管理、IBVS/PBVS 控制器以及 Sony + YOLO + 2D 跟踪代码已经具备；当前感知链待 Jetson/相机验收，双相机融合、真实底盘通信、MPC/QP、运镜 Action 和上层交互仍需继续完成。
 
 | 阶段 | 目标能力 | 当前进度 | 进度说明 |
 | --- | --- | --- | --- |
-| V1 MVP 跟拍 | 图像误差控制、距离控制、云台偏角补偿 | 约 90% | MVP 控制链完整，可通过 mock target 和 2D 仿真验证；真实 YOLO 输入还未接入 |
+| V1 MVP 跟拍 | 图像误差控制、距离控制、云台偏角补偿 | 约 90% | MVP 控制链完整，可通过 mock target 和 2D 仿真验证；YOLO 代码已接入，待真实模型与相机验证 |
 | V2 稳定化 | 滤波、死区、限幅、目标锁定、目标丢失处理 | 约 85% | `mvp_follow_controller_node` 已具备低通滤波、死区、限幅和目标超时；跟踪层已有目标 ID 管理 |
 | V3 混合视觉伺服 | IBVS、PBVS、底盘-云台控制分配、运行时模式切换 | 约 70% | IBVS/PBVS、`ServoManagerNode`、`ControlAllocator` 和 `SetServoMode` 已实现；HYBRID/MPC/RL 模式仍是扩展接口 |
 | V4 高级优化 | MPC、QP 控制分配、RL、运镜轨迹优化 | 约 5% | 已有 MPC/RL 头文件和接口设想，尚未接入 QP 求解器和完整运镜任务 |
@@ -78,9 +78,9 @@ ROS2 架构
 | 技术类别 | 当前进度 | 已具备能力 | 下一步技术路线 |
 | --- | --- | --- | --- |
 | 1. ROS2 系统架构与接口层 | 基本完成 | 6 个 ROS 2 包、自定义 msg/srv/action、QoS 封装、分阶段 launch、YAML 参数体系 | 引入更明确的 Lifecycle/状态机管理，并为运镜 Action 和交互节点继续扩展接口 |
-| 2. 硬件驱动与设备抽象 | 云台实机链路已打通，底盘/IMU 待接入 | 底盘/云台/IMU 抽象接口、Factory Pattern、`use_sim` 实/仿切换、PlatformState 聚合；RS2 bringup 见 [`rs2_gimbal_bringup.md`](rs2_gimbal_bringup.md) | 继续接入底盘、IMU、电池、Sony/奥比中光相机，并补齐设备诊断 |
-| 3. 图像采集与视觉感知 | 管线完成，检测推理待接入 | `DetectionNode`、`PerceptionPipeline`、图像订阅、检测参数和输出接口 | 实现 YOLO ONNX Runtime/TensorRT 推理，接入 Sony 图像和相机标定数据 |
-| 4. 目标跟踪与状态估计 | 大部分完成 | SORT 风格 Kalman 跟踪、IoU 关联、目标 ID、目标锁定、深度图采样和 bbox 估距 | 增加速度估计滤波、ReID/ByteTrack 增强、tf2 坐标转换和目标重识别策略 |
+| 2. 硬件驱动与设备抽象 | 云台实机链路已打通，Sony代码待验收，底盘/IMU待接入 | Sony CRSDK驱动及诊断、底盘/云台/IMU抽象接口、Factory Pattern、`use_sim` 实/仿切换、PlatformState聚合；RS2 bringup见 [`rs2_gimbal_bringup.md`](rs2_gimbal_bringup.md) | 验收Sony驱动，继续接入底盘、IMU、电池和奥比中光深度相机 |
+| 3. 图像采集与视觉感知 | 代码收口，待 Jetson/相机验收 | Sony CRSDK驱动、CameraInfo、YOLOv5/v8 ONNX/TensorRT、可测前后处理、按类别NMS、低延迟队列与诊断 | 完成Sony标定、已知图片对齐、ROS链路与30分钟稳定性验收 |
+| 4. 目标跟踪与状态估计 | 2D代码收口，待实景验收 | Kalman+Hungarian全局IoU关联、连续确认、CONFIRMED/LOST、目标选择与失败反馈 | 先验证Sony单相机多人跟踪；双相机融合另立阶段，复杂场景再升级ByteTrack/ReID |
 | 5. 底盘与云台基础控制 | 云台键盘/语音实机可控，底盘待接入 | `/cmd_vel`、`GimbalCmd`、三轮全向运动学、云台绝对位置累加控制、低速限幅和平台反馈接口 | 固化云台限位和诊断，继续接入真实底盘、手动接管和速度档位 |
 | 6. 视觉伺服与跟随控制 | 核心完成 | MVP P 控制、IBVS、PBVS、50Hz ServoManager、控制分配、Action feedback | 补齐自动构图模板、HYBRID 模式、TF 驱动分配和实机闭环参数整定 |
 | 7. 优化控制与高级协同 | 接口预留 | MPC/RL 头文件、ControlAllocator 优化模式设想 | 接入 OSQP/qpOASES，实现 MPC 控制器和 QP 控制分配 |
@@ -118,7 +118,7 @@ Sony/深度相机真实图像
 | L6 | 人机交互与任务层 | 规划中的 Teleop/Web/Voice、`VisualServo.action` | 接收操作员意图，触发跟拍、模式切换和运镜任务 |
 | L5 | 任务编排与启动层 | `bringup_pkg`、RViz2、Foxglove | 分阶段启动平台、感知、控制和可视化节点 |
 | L4 | 视觉伺服与运动控制层 | `servo_control_pkg`、`ServoManagerNode`、IBVS/PBVS、`ControlAllocator` | 根据目标状态计算相机速度，并分配到底盘和云台 |
-| L3 | 目标状态与视觉感知层 | `perception_pkg`、Detection/Tracking/Depth/Pipeline | 从图像和深度数据生成稳定目标状态 |
+| L3 | 目标状态与视觉感知层 | `perception_pkg`、Detection/Tracking | 当前从 Sony 图像生成稳定 2D 目标轨迹；后续扩展深度状态 |
 | L2 | 平台状态与硬件抽象层 | `robot_platform_pkg`、PlatformManager、DriverNodes | 将底盘、云台、IMU、里程计统一成 ROS 2 状态和命令接口 |
 | L1 | 传感器与执行器层 | Sony/深度相机、底盘、RS2、IMU、电池、Gazebo 后端 | 真实硬件或仿真设备，执行控制命令并产生传感器数据 |
 | 横向 | 公共接口与仿真评估 | `vision_servo_msgs`、QoS、TF、`simulation_pkg`、rosbag2 | 统一消息类型、通信策略、坐标系、仿真输入和指标评估 |
@@ -221,9 +221,9 @@ DriverNode
 
 Sony 相机和奥比中光深度相机技术路线：
 
-- Sony 图像通过 V4L2、采集卡 SDK 或 OpenCV VideoCapture 接入。
+- Sony 图像当前通过 Sony Camera Remote SDK 的 live view 接入。
 - 图像发布为 `sensor_msgs/Image`，内参发布为 `sensor_msgs/CameraInfo`。
-- 奥比中光 335 深度图发布为深度图 Topic，并与 RGB 图像建立时间戳和 TF 对齐关系。
+- 奥比中光 335 的深度读取、与 Sony 的标定、时间同步和 TF 对齐留到融合阶段。
 - 图像链路使用 `image_transport`，后续可接压缩传输或硬件编码。
 
 设备状态路线：
@@ -245,8 +245,8 @@ Sony 相机和奥比中光深度相机技术路线：
 ```text
 Sony Camera / Video Capture
   -> Image Driver
-  -> /camera/image_raw
-  -> /camera/camera_info
+  -> /sony/image_raw
+  -> /sony/camera_info
   -> DetectionNode
 ```
 
@@ -256,7 +256,7 @@ Sony Camera / Video Capture
 Image
   -> cv_bridge 转 OpenCV Mat
   -> YOLO 前处理
-  -> ONNX Runtime 或 TensorRT 推理
+  -> OpenCV DNN ONNX 或 TensorRT 推理
   -> NMS 后处理
   -> TargetArray 发布
 ```

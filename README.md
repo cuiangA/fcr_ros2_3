@@ -9,7 +9,7 @@
 按照[四阶段渐进路线](https://github.com/cuiangA/fcr_ros2_3)（V1 MVP → V2 稳定化 → V3 混合视觉伺服 → V4 MPC优化），**当前处于 V2.5**：
 
 ```
-V1  MVP          ████████████████████░  90%  控制闭环完整, YOLO 推理待填充
+V1  MVP          ████████████████████░  90%  控制闭环与感知代码完整，待相机标定实测
 V2  稳定化       █████████████████░░░░  85%  滤波/死区/限幅/目标管理齐全
 V3  混合视觉伺服  ██████████████░░░░░░░  70%  IBVS/PBVS/Allocator/热切换已实现
 V4  MPC/优化      █░░░░░░░░░░░░░░░░░░░░   5%  仅头文件骨架
@@ -17,7 +17,7 @@ V4  MPC/优化      █░░░░░░░░░░░░░░░░░░░
 
 | 阶段 | 控制方案 | 状态 |
 |------|---------|------|
-| V1 | 图像误差控制 + 距离控制 + 云台偏角补偿 | ✅ 基本完成（YOLO 推理为占位） |
+| V1 | 图像误差控制 + 距离控制 + 云台偏角补偿 | ✅ 基本完成（待双相机实测） |
 | V2 | V1 + 滤波 + 死区 + 限幅 + 目标锁定 | ✅ 大部分完成 |
 | V3 | 云台 IBVS + 底盘 PBVS + 控制分配 | ✅ 算法完成，架构待拆分 |
 | V4 | QP / MPC 协同控制 | ❌ 未开始 |
@@ -31,7 +31,7 @@ fcr_ros2_3/
 ├── build.sh
 ├── src/
 │   ├── vision_servo_msgs/       # 接口定义包（5 msg, 3 srv, 1 action）
-│   ├── perception_pkg/          # 感知管线（检测→跟踪→深度估计）
+│   ├── perception_pkg/          # 感知管线（Sony 检测→目标跟踪）
 │   ├── servo_control_pkg/       # 伺服控制（IBVS/PBVS/MPC/RL + MVP跟拍）
 │   ├── robot_platform_pkg/      # 硬件平台（底盘/云台/IMU/里程计）
 │   ├── simulation_pkg/          # 仿真（Gazebo URDF + Python脚本）
@@ -43,16 +43,15 @@ fcr_ros2_3/
 ## 2. 数据流
 
 ```
-/camera/image_raw  ──→  DetectionNode(YOLO)  ──→  /perception/detections
-                         [⚠ 推理占位，仿真用 mock]         │
+/sony/image_raw  ──→  DetectionNode(YOLO ONNX/TensorRT) ──→ /perception/detections
+                                                          │
                                                           ▼
                                                    TrackingNode(SORT)
                                                    /perception/tracks
                                                           │
                                                           ▼
-                                                   DepthEstimatorNode
-                                                   /perception/targets_3d
-                                                          │
+                                                   /perception/tracks
+                                                          │（深度融合后续实现）
 /platform/state  ←──  PlatformManagerNode  ←──  ServoManagerNode
                                                          │
                                               ┌──────────┼──────────┐
@@ -84,24 +83,23 @@ mvp_follow_controller_node    ← 自包含，不依赖 pluginlib / ControlAlloc
 
 | 模块 | 状态 | 说明 |
 |------|------|------|
-| YOLO 检测 (DetectionNode) | ⚠️ 占位 | `infer()` 为空；架构完整，支持 ONNX/TensorRT/OpenCV DNN 三种推理路径 |
-| 多目标跟踪 (MultiObjectTracker) | ✅ 完成 | 8 状态 Kalman [x,y,w,h,vx,vy,vw,vh] + IoU 匈牙利贪心匹配 |
-| 深度估计 (DepthEstimatorNode) | ✅ 完成 | 双缓存异步融合：深度图采样（优先）→ bbox 面积推算（回退） |
-| 组合流水线 (PerceptionPipeline) | ✅ 完成 | ComposableNode，detection→tracking→depth 三阶段零拷贝 |
+| YOLO 检测 (DetectionNode) | 🚧 待Jetson验收 | YOLOv5/v8 ONNX/TensorRT、可测前后处理、NMS、后台最新帧推理和诊断 |
+| 多目标跟踪 (MultiObjectTracker) | 🚧 待Jetson验收 | 8 状态 Kalman `[x,y,w,h,vx,vy,vw,vh]` + 时间尺度预测 + Hungarian全局IoU关联 |
+| 深度估计 (DepthEstimatorNode) | ⚠️ 历史兼容 | 保留原仿真代码，不进入当前默认启动链 |
+| 双相机融合 | ⏳ 后续阶段 | 本轮不实现；待相机驱动、安装方式和标定方案确定后单独设计 |
 
 **跟踪器核心逻辑** ([multi_object_tracker.cpp](src/perception_pkg/src/multi_object_tracker.cpp))：
 
 ```
-每帧：predict() → associate(IoU 贪心) → Kalman correct() → 创建新轨迹 / 删除超龄轨迹
-仅输出 total_visible_count ≥ min_hits(3) 的已确认轨迹，防止假阳性
+每帧：predict() → associate(IoU + Hungarian) → Kalman correct() → 创建新轨迹 / 删除超龄轨迹
+仅在连续命中达到 min_hits(3) 后确认；短时丢失轨迹标记 LOST/visible=false
 ```
 
-**深度估计两级回退** ([depth_estimator_node.cpp](src/perception_pkg/src/depth_estimator_node.cpp))：
+**当前感知主链路**：
 
 ```
-方法1（置信度 0.8）：bbox 中心点深度图采样 → Z = depth / 1000
-方法2（置信度 0.5）：depth = sqrt((fx·fy·real_w·real_h) / area_px)  → 无需深度图
-反投影：X = (u-cx)/fx·Z, Y = (v-cy)/fy·Z
+Sony Image → YOLO ONNX → /perception/detections
+→ Kalman + IoU tracking → /perception/tracks
 ```
 
 ### 3.2 servo_control_pkg — 伺服控制
@@ -192,7 +190,7 @@ base_wz      =  Kb · q_yaw        (追云台偏角，不追图像误差)
 
 | 数据类型 | Reliability | History | Depth | Durability |
 |---------|-------------|---------|-------|------------|
-| 图像 `/camera/image_raw` | BEST_EFFORT | KEEP_LAST | 1 | VOLATILE |
+| 图像 `/sony/image_raw` | BEST_EFFORT | KEEP_LAST | 1 | VOLATILE |
 | 深度图 `/camera/depth/image_raw` | BEST_EFFORT | KEEP_LAST | 1 | VOLATILE |
 | 相机内参 `/camera/camera_info` | RELIABLE | KEEP_LAST | 1 | TRANSIENT_LOCAL |
 | 检测/跟踪/3D目标 | RELIABLE | KEEP_LAST | 5 | VOLATILE |
@@ -255,7 +253,7 @@ ros2 topic echo /cmd_gimbal
 
 ### 高优先级
 
-- **YOLO 模型加载和推理** — `detection_node.cpp` 的 `load_model()` 和 `infer()` 当前为空，需接入 ONNX Runtime 或 TensorRT 实现真实目标检测
+- **YOLO Jetson 性能验证** — OpenCV DNN 的 ONNX 加载、预热、前后处理和低延迟推理代码已完成；待在 Jetson 上评估 CUDA DNN，并在后续阶段接入 TensorRT engine 后端
 
 ### 中优先级
 
@@ -274,7 +272,7 @@ ros2 topic echo /cmd_gimbal
 ## 9. 关键设计决策
 
 1. **底盘不直接追图像水平误差** — 底盘 `wz` 追云台 yaw 偏角，形成串级结构。云台快速修正短时偏移，底盘慢速消除长期偏角，避免画面抖动。
-2. **双缓存异步融合** — 深度图和检测结果频率不匹配时，任意一路到达即触发融合，避免时间同步延迟。
+2. **历史深度节点** — 当前仅用于兼容既有仿真，不作为两台独立相机的融合实现。
 3. **插件化控制器** — pluginlib + 抽象基类，运行时热切换，方便论文扩展。
 4. **Factory Pattern 实/仿共用** — 硬件接口层通过 `use_sim` 参数切换，上层算法代码完全不变。
 5. **ComposableNode 零拷贝** — 感知三阶段同进程顺序调用，消除序列化开销。

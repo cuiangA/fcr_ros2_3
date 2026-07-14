@@ -1,0 +1,10 @@
+sony_camera_node:
+  ros__parameters:
+    camera_index: 1
+    camera_name: "sony_zv_e10_ii"
+    camera_frame: "sony_camera_optical_frame"
+    camera_info_url: ""
+    publish_rate: 30.0
+    reconnect_initial_delay: 1.0
+    reconnect_max_delay: 30.0
+    stream_stall_timeout: 5.0

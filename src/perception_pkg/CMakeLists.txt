@@ -1,95 +1,183 @@
-# ── perception_pkg CMakeLists.txt ──────────────────────────────────
-# 感知管线包：YOLO 目标检测 → 多目标跟踪 → 深度估计
-#
-# 构建目标：
-#   1. perception_qos (INTERFACE 库) — 统一的 QoS 配置，各节点共享
-#   2. detection_node — 独立可执行文件，YOLO 目标检测
-#   3. tracking_node — 独立可执行文件，卡尔曼滤波多目标跟踪
-#   4. depth_estimator_node — 独立可执行文件，单目深度估计
-#   5. perception_pipeline (共享库) — 可组合节点，零拷贝管线
-#
-# C++17 和 -Wall -Wextra -Wpedantic 用于编译期错误检测
-# ────────────────────────────────────────────────────────────────────
-
 cmake_minimum_required(VERSION 3.8)
 project(perception_pkg)
 
-# C++17：OpenCV + rosidl 生成代码需要此标准
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
 endif()
 
-# 严格的编译警告，帮助尽早发现潜在问题
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# ── 依赖声明 ──────────────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(rclcpp_components REQUIRED)   # 可组合节点支持（零拷贝管线）
+find_package(rclcpp_components REQUIRED)
+find_package(rcl_interfaces REQUIRED)
+find_package(diagnostic_updater REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(vision_servo_msgs REQUIRED)   # 视觉伺服自定义消息类型
-find_package(cv_bridge REQUIRED)           # OpenCV ↔ ROS 图像桥接
-find_package(image_transport REQUIRED)     # 高效的图像传输与订阅
-find_package(tf2_ros REQUIRED)             # TF 坐标变换支持
+find_package(std_msgs REQUIRED)
+find_package(vision_servo_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(image_transport REQUIRED)
+find_package(message_filters REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
-find_package(OpenCV REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn video)
+find_package(Threads REQUIRED)
 
-# ── QoS 工具库（INTERFACE，仅头文件） ──────────────────────────────
+option(
+  PERCEPTION_BUILD_LEGACY_FUSION
+  "Build the pre-calibration depth estimator and monolithic legacy pipeline"
+  OFF)
+option(
+  PERCEPTION_ENABLE_TENSORRT
+  "Build TensorRT engine support when TensorRT and CUDA runtime development files are present"
+  ON)
+
 add_library(perception_qos INTERFACE)
-target_include_directories(perception_qos INTERFACE include)
+target_include_directories(perception_qos INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
 target_link_libraries(perception_qos INTERFACE rclcpp::rclcpp)
 
-# ── 检测节点（独立可执行文件） ────────────────────────────────────
+add_library(yolo_processing src/yolo_processing.cpp)
+target_include_directories(yolo_processing PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDE_DIRS})
+ament_target_dependencies(yolo_processing vision_servo_msgs)
+target_link_libraries(yolo_processing PUBLIC ${OpenCV_LIBS})
+
 add_executable(detection_node src/detection_node.cpp)
-target_include_directories(detection_node PRIVATE include)
+target_include_directories(detection_node PRIVATE include ${OpenCV_INCLUDE_DIRS})
 ament_target_dependencies(detection_node
-  rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge image_transport OpenCV
-)
-target_link_libraries(detection_node perception_qos)
-install(TARGETS detection_node DESTINATION lib/${PROJECT_NAME})
+  rclcpp rcl_interfaces diagnostic_updater diagnostic_msgs sensor_msgs std_msgs vision_servo_msgs
+  cv_bridge image_transport)
+target_link_libraries(detection_node
+  perception_qos yolo_processing ${OpenCV_LIBS} Threads::Threads)
 
-# ── 跟踪节点（独立可执行文件） ────────────────────────────────────
-add_executable(tracking_node src/tracking_node.cpp src/multi_object_tracker.cpp)
-target_include_directories(tracking_node PRIVATE include)
+if(PERCEPTION_ENABLE_TENSORRT)
+  find_path(TENSORRT_INCLUDE_DIR NvInfer.h
+    PATHS /usr/include /usr/include/aarch64-linux-gnu /usr/local/TensorRT/include)
+  find_library(TENSORRT_LIBRARY nvinfer
+    PATHS /usr/lib /usr/lib/aarch64-linux-gnu /usr/local/TensorRT/lib)
+  find_path(CUDA_RUNTIME_INCLUDE_DIR cuda_runtime_api.h
+    PATHS
+      $ENV{CUDA_HOME}/include
+      /usr/local/cuda/include
+      /usr/local/cuda/targets/aarch64-linux/include
+      /usr/local/cuda-12.5/targets/aarch64-linux/include
+      /usr/include)
+  find_library(CUDA_RUNTIME_LIBRARY cudart
+    PATHS
+      $ENV{CUDA_HOME}/lib64
+      /usr/local/cuda/lib64
+      /usr/local/cuda/targets/aarch64-linux/lib
+      /usr/local/cuda-12.5/targets/aarch64-linux/lib
+      /usr/lib/aarch64-linux-gnu)
+  if(TENSORRT_INCLUDE_DIR AND TENSORRT_LIBRARY AND
+     CUDA_RUNTIME_INCLUDE_DIR AND CUDA_RUNTIME_LIBRARY)
+    target_sources(detection_node PRIVATE src/tensorrt_backend.cpp)
+    target_include_directories(detection_node PRIVATE
+      ${TENSORRT_INCLUDE_DIR} ${CUDA_RUNTIME_INCLUDE_DIR})
+    target_link_libraries(detection_node ${TENSORRT_LIBRARY} ${CUDA_RUNTIME_LIBRARY})
+    target_compile_definitions(detection_node PRIVATE PERCEPTION_HAS_TENSORRT=1)
+    message(STATUS "TensorRT detection backend enabled")
+  else()
+    message(STATUS
+      "TensorRT development files not found; detection_node will support OpenCV ONNX only")
+  endif()
+endif()
+
+add_executable(tracking_node
+  src/tracking_node.cpp
+  src/multi_object_tracker.cpp
+  src/target_selector.cpp)
+target_include_directories(tracking_node PRIVATE include ${OpenCV_INCLUDE_DIRS})
 ament_target_dependencies(tracking_node
-  rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge OpenCV
-)
-target_link_libraries(tracking_node perception_qos)
-install(TARGETS tracking_node DESTINATION lib/${PROJECT_NAME})
+  rclcpp rcl_interfaces diagnostic_updater diagnostic_msgs vision_servo_msgs)
+target_link_libraries(tracking_node perception_qos ${OpenCV_LIBS})
 
-# ── 深度估计节点 ──────────────────────────────────────────────────
-add_executable(depth_estimator_node src/depth_estimator_node.cpp)
-target_include_directories(depth_estimator_node PRIVATE include)
-ament_target_dependencies(depth_estimator_node
-  rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge image_transport tf2_ros tf2_geometry_msgs
-)
-target_link_libraries(depth_estimator_node perception_qos)
-install(TARGETS depth_estimator_node DESTINATION lib/${PROJECT_NAME})
+if(PERCEPTION_BUILD_LEGACY_FUSION)
+  message(WARNING
+    "Building legacy depth/fusion nodes. They are not calibrated for the Sony + Orbbec pair "
+    "and must not be used as the production /perception/targets_3d source.")
+  add_executable(depth_estimator_node src/depth_estimator_node.cpp)
+  target_include_directories(depth_estimator_node PRIVATE include ${OpenCV_INCLUDE_DIRS})
+  ament_target_dependencies(depth_estimator_node
+    rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge image_transport
+    tf2_ros tf2_geometry_msgs)
+  target_link_libraries(depth_estimator_node perception_qos ${OpenCV_LIBS})
 
-# ── 可组合感知管线（共享库，支持零拷贝进程内通信） ────────────────
-add_library(perception_pipeline SHARED src/perception_pipeline.cpp src/multi_object_tracker.cpp)
-target_include_directories(perception_pipeline PRIVATE include)
-ament_target_dependencies(perception_pipeline
-  rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge image_transport OpenCV
-)
-target_link_libraries(perception_pipeline perception_qos)
-# 注册为可组合节点，支持通过 ComposableNodeContainer 动态加载
-rclcpp_components_register_node(perception_pipeline
-  PLUGIN "perception_pkg::PerceptionPipeline"
-  EXECUTABLE perception_pipeline_node
-)
-install(TARGETS perception_pipeline
+  add_library(perception_pipeline SHARED
+    src/perception_pipeline.cpp
+    src/multi_object_tracker.cpp)
+  target_include_directories(perception_pipeline PRIVATE include ${OpenCV_INCLUDE_DIRS})
+  ament_target_dependencies(perception_pipeline
+    rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge image_transport)
+  target_link_libraries(perception_pipeline perception_qos ${OpenCV_LIBS})
+  rclcpp_components_register_node(perception_pipeline
+    PLUGIN "perception_pkg::PerceptionPipeline"
+    EXECUTABLE perception_pipeline_node)
+
+  install(TARGETS depth_estimator_node DESTINATION lib/${PROJECT_NAME})
+  install(TARGETS perception_pipeline
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin)
+endif()
+
+install(TARGETS
+  yolo_processing
+  detection_node
+  tracking_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
-)
-
-# ── 头文件（供其他包 include） ────────────────────────────────────
+  RUNTIME DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
-
-# ── 启动文件和配置 ────────────────────────────────────────────────
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(FILES models/README.md models/manifest.json DESTINATION share/${PROJECT_NAME}/models)
+install(PROGRAMS
+  scripts/download_model.py
+  scripts/check_perception.sh
+  scripts/jetson_build_perception.sh
+  scripts/jetson_acceptance.sh
+  DESTINATION lib/${PROJECT_NAME})
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/models/yolov8n.onnx")
+  install(FILES models/yolov8n.onnx DESTINATION share/${PROJECT_NAME}/models)
+else()
+  message(STATUS
+    "yolov8n.onnx is not staged. Build succeeds without it; run scripts/download_model.py "
+    "before launching detection or pass model_path explicitly.")
+endif()
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  find_package(launch_testing_ament_cmake REQUIRED)
+  ament_add_gtest(test_multi_object_tracker
+    test/test_multi_object_tracker.cpp
+    src/multi_object_tracker.cpp)
+  if(TARGET test_multi_object_tracker)
+    target_include_directories(test_multi_object_tracker PRIVATE include ${OpenCV_INCLUDE_DIRS})
+    ament_target_dependencies(test_multi_object_tracker rclcpp vision_servo_msgs)
+    target_link_libraries(test_multi_object_tracker ${OpenCV_LIBS})
+  endif()
+  ament_add_gtest(test_yolo_processing test/test_yolo_processing.cpp)
+  if(TARGET test_yolo_processing)
+    target_include_directories(test_yolo_processing PRIVATE include ${OpenCV_INCLUDE_DIRS})
+    ament_target_dependencies(test_yolo_processing vision_servo_msgs)
+    target_link_libraries(test_yolo_processing yolo_processing ${OpenCV_LIBS})
+  endif()
+  ament_add_gtest(test_target_selector
+    test/test_target_selector.cpp
+    src/target_selector.cpp)
+  if(TARGET test_target_selector)
+    target_include_directories(test_target_selector PRIVATE include)
+    ament_target_dependencies(test_target_selector vision_servo_msgs)
+  endif()
+  add_launch_test(test/test_tracking_launch.py TIMEOUT 30)
+endif()
 
 ament_package()

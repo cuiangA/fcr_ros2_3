@@ -4,7 +4,7 @@ FCR 生产环境一键启动文件。
 
 启动顺序（分阶段定时启动，确保依赖就绪）：
   1. t=0s:  机器人平台（底盘/云台/IMU/里程计硬件驱动）
-  2. t=2s:  感知管线（检测 + 跟踪 + 深度估计）—— 等待相机驱动就绪
+  2. t=2s:  感知管线（检测 + 跟踪）—— 等待相机驱动就绪
   3. t=3s:  伺服控制 —— 等待感知输出 + 平台状态反馈就绪
   4. t=4s:  可视化（RViz2 + Foxglove Bridge，可选）
 
@@ -13,9 +13,9 @@ FCR 生产环境一键启动文件。
 """
 from launch import LaunchDescription
 from launch.actions import (
-    DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, GroupAction
+    DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 )
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.conditions import IfCondition
@@ -26,15 +26,17 @@ def generate_launch_description():
     use_sim = LaunchConfiguration("use_sim")
     controller_plugin = LaunchConfiguration("controller_plugin")
     conf_threshold = LaunchConfiguration("confidence_threshold")
-    use_composition = LaunchConfiguration("use_composition")
+    model_path = LaunchConfiguration("model_path")
+    detection_device = LaunchConfiguration("detection_device")
     use_mock_detector = LaunchConfiguration("use_mock_detector")
+    enable_detection = LaunchConfiguration("enable_detection")
 
     # 各包的共享目录，用于引用 launch 文件
     pkg_share = FindPackageShare("bringup_pkg")
     perception_share = FindPackageShare("perception_pkg")
     servo_share = FindPackageShare("servo_control_pkg")
     platform_share = FindPackageShare("robot_platform_pkg")
-    sim_share = FindPackageShare("simulation_pkg")
+    sony_share = FindPackageShare("sony_camera_pkg")
 
     # ── 1. 机器人平台（硬件驱动层） ─────────────────────────
     platform_launch = IncludeLaunchDescription(
@@ -42,12 +44,38 @@ def generate_launch_description():
         launch_arguments={"use_sim": use_sim}.items(),
     )
 
+    # ── 1b. Sony RGB相机（实机模式）─────────────────────────
+    sony_launch = IncludeLaunchDescription(
+        PathJoinSubstitution([sony_share, "launch", "sony_camera.launch.py"]),
+        launch_arguments={
+            "enable_perception": "false",
+            "camera_index": LaunchConfiguration("sony_camera_index"),
+            "camera_info_url": LaunchConfiguration("sony_camera_info_url"),
+            "image_topic": LaunchConfiguration("sony_image_topic"),
+        }.items(),
+        condition=IfCondition(
+            PythonExpression([
+                "'", LaunchConfiguration("enable_sony_camera"), "' == 'true' and '",
+                use_sim, "' != 'true'",
+            ])
+        ),
+    )
+
+    # Mock和真实检测互斥；跟踪节点在两种模式下都可以运行。
+    effective_detection = PythonExpression([
+        "'", enable_detection, "' == 'true' and '", use_mock_detector, "' != 'true'"
+    ])
+
     # ── 2. 感知管线 ─────────────────────────────────────────
     perception_launch = IncludeLaunchDescription(
         PathJoinSubstitution([perception_share, "launch", "perception.launch.py"]),
         launch_arguments={
-            "use_composition": use_composition,
+            "model_path": model_path,
+            "device": detection_device,
             "confidence_threshold": conf_threshold,
+            "enable_detection": effective_detection,
+            "enable_tracking": LaunchConfiguration("enable_tracking"),
+            "sony_image_topic": LaunchConfiguration("sony_image_topic"),
         }.items(),
     )
 
@@ -66,6 +94,7 @@ def generate_launch_description():
         launch_arguments={
             "controller_plugin": controller_plugin,
         }.items(),
+        condition=IfCondition(LaunchConfiguration("enable_servo")),
     )
 
     # ── 4. RViz2（可选可视化） ──────────────────────────────
@@ -96,17 +125,46 @@ def generate_launch_description():
                               description="视觉伺服控制器插件类名"),
         DeclareLaunchArgument("confidence_threshold", default_value="0.5",
                               description="YOLO 检测置信度阈值"),
-        DeclareLaunchArgument("use_composition", default_value="true",
-                              description="是否启用进程内可组合节点（零拷贝）"),
+        DeclareLaunchArgument(
+            "model_path",
+            default_value=PathJoinSubstitution(
+                [perception_share, "models", "yolov8n.onnx"]
+            ),
+            description="YOLO ONNX 模型路径",
+        ),
+        DeclareLaunchArgument(
+            "detection_device",
+            default_value="cpu",
+            description="检测推理设备：cpu、cuda_fp16、cuda_fp32 或 tensorrt",
+        ),
+        DeclareLaunchArgument("enable_detection", default_value="true",
+                              description="是否启动真实 YOLO 检测节点"),
+        DeclareLaunchArgument("enable_tracking", default_value="true",
+                              description="是否启动目标跟踪节点"),
         DeclareLaunchArgument("use_rviz", default_value="false",
                               description="是否启动 RViz2"),
         DeclareLaunchArgument("use_foxglove", default_value="false",
                               description="是否启动 Foxglove WebSocket 桥接"),
         DeclareLaunchArgument("use_mock_detector", default_value="false",
                               description="是否使用合成检测器（绕过 YOLO）"),
+        DeclareLaunchArgument("enable_sony_camera", default_value="true",
+                              description="实机模式下是否启动Sony相机"),
+        DeclareLaunchArgument("sony_image_topic", default_value="/sony/image_raw",
+                              description="2D检测使用的RGB图像话题"),
+        DeclareLaunchArgument("sony_camera_index", default_value="1",
+                              description="CRSDK枚举得到的一基相机序号"),
+        DeclareLaunchArgument(
+            "sony_camera_info_url", default_value="",
+            description="Sony精确分辨率标定文件，例如file:///home/nvidia/.ros/camera_info/sony.yaml",
+        ),
+        DeclareLaunchArgument(
+            "enable_servo", default_value="false",
+            description="融合前保持false；仅在有效3D目标源可用时启动控制闭环",
+        ),
 
         # 阶段 1：平台驱动 (t=0s)
         platform_launch,
+        sony_launch,
         mock_detector,
 
         # 阶段 2：感知管线 (t=2s，等待相机驱动就绪)
