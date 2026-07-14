@@ -48,7 +48,7 @@ target_include_directories(yolo_processing PUBLIC
   $<INSTALL_INTERFACE:include>
   ${OpenCV_INCLUDE_DIRS})
 ament_target_dependencies(yolo_processing vision_servo_msgs)
-target_link_libraries(yolo_processing PUBLIC ${OpenCV_LIBS})
+target_link_libraries(yolo_processing ${OpenCV_LIBS})
 
 add_executable(detection_node src/detection_node.cpp)
 target_include_directories(detection_node PRIVATE include ${OpenCV_INCLUDE_DIRS})
