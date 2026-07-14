@@ -161,7 +161,11 @@ if(BUILD_TESTING)
     src/multi_object_tracker.cpp)
   if(TARGET test_multi_object_tracker)
     target_include_directories(test_multi_object_tracker PRIVATE include ${OpenCV_INCLUDE_DIRS})
-    ament_target_dependencies(test_multi_object_tracker rclcpp vision_servo_msgs)
+    # multi_object_tracker.cpp includes tracking_node.hpp, which also declares
+    # the diagnostic_updater-backed ROS node wrapper.  The test therefore
+    # needs the diagnostic headers even though it exercises only the tracker.
+    ament_target_dependencies(test_multi_object_tracker
+      rclcpp diagnostic_updater vision_servo_msgs)
     target_link_libraries(test_multi_object_tracker ${OpenCV_LIBS})
   endif()
   ament_add_gtest(test_yolo_processing test/test_yolo_processing.cpp)
