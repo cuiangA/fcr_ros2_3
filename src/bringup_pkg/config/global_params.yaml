@@ -11,7 +11,7 @@ system:
 # ── 感知子系统 ──────────────────────────────────────────────
 perception:
   model_path: "/models/yolov8n.onnx"  # YOLOv8 模型文件路径
-  confidence_threshold: 0.5           # 检测置信度阈值（低于此值的检测结果被丢弃）
+  confidence_threshold: 0.3           # 检测置信度阈值（低于此值的检测结果被丢弃，召回优先）
   use_composition: true               # 启用进程内组件模式，零拷贝传输图像
 
 # ── 伺服控制子系统 ─────────────────────────────────────────

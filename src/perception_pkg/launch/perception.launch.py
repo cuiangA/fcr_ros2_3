@@ -11,7 +11,7 @@
 
 参数：
   - use_composition (bool, 默认 true):  是否使用可组合管线
-  - confidence_threshold (float, 默认 0.5): YOLO 检测置信度阈值
+  - confidence_threshold (float, 默认 0.3): YOLO 检测置信度阈值
 """
 
 from launch import LaunchDescription
@@ -103,7 +103,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("use_composition", default_value="true",
                               description="是否使用进程内可组合节点（零拷贝）"),
-        DeclareLaunchArgument("confidence_threshold", default_value="0.5",
+        DeclareLaunchArgument("confidence_threshold", default_value="0.3",
                               description="YOLO 检测置信度阈值"),
         detection_node, tracking_node, depth_node, container,
     ])
