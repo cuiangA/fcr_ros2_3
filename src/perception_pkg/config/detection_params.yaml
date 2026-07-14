@@ -1,11 +1,14 @@
 # perception_pkg/config/detection_params.yaml
-# YOLO 目标检测节点参数
-detection_node:
+# YOLO 目标检测参数（detection_node 与 perception_pipeline 共享）
+# 使用 /** 通配符，让独立 detection_node 和可组合 perception_pipeline 都能读到同一组参数。
+/**:
   ros__parameters:
-    model_path: "/models/yolov8n.onnx"  # ONNX 模型文件路径（n=nano，适合嵌入式/边缘设备）
+    # 模型路径：使用 find-pkg-share 让本机 (/home/zm/projects/fcr_ros2_3/install)
+    # 和容器 (/ws/install) 都能自动找到。模型在 src/perception_pkg/models/ 下。
+    model_path: "$(find-pkg-share perception_pkg)/models/yolov8n.onnx"
     model_type: "yolov8"                # 模型类型：yolov8, yolov5, tensorrt
-    device: "cuda:0"                    # 推理设备：cuda:0（GPU）或 cpu
+    device: "cpu"                       # 推理设备：cuda:0（GPU）或 cpu（无 CUDA 时回退 CPU）
     confidence_threshold: 0.5           # 置信度阈值（低于此值的检测结果被丢弃）
     nms_threshold: 0.45                 # NMS（非极大值抑制）IoU 阈值
-    class_names: ["person", "car", "bicycle", "motorcycle"]  # 需要检测的目标类别列表
+    class_names: ["person", "car", "bicycle", "motorcycle"]  # 需要检测的目标类别列表（空=全部 COCO）
     camera_frame: "camera_link"         # 相机在 TF 树中的坐标系名称

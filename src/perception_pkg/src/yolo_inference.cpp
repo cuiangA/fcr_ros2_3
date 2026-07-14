@@ -1,11 +1,24 @@
 /**
  * @file yolo_inference.cpp
- * @brief YOLOv8 ONNX 推理实现（OpenCV DNN 后端）。
+ * @brief YOLOv8 ONNX 推理实现（ONNX Runtime 后端）。
+ *
+ * 推理流程（每帧）：
+ *   1. letterbox 预处理：保持长宽比 resize + 灰边填充 → 640×640
+ *   2. blob：/255 归一化 + BGR→RGB + HWC→CHW
+ *   3. Ort::Session::Run → 输出 [1, 84, 8400]
+ *   4. 解析 + 置信度过滤 + 类别白名单过滤 + 反 letterbox 还原像素坐标
+ *   5. OpenCV NMSBoxes 后处理
+ *   6. 构造 vision_servo_msgs::TargetArray
  */
 
 #include "perception_pkg/yolo_inference.hpp"
+#include <opencv2/dnn.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/core.hpp>
 #include <algorithm>
 #include <stdexcept>
+#include <cstring>
+#include <vector>
 
 namespace perception_pkg {
 
@@ -33,27 +46,49 @@ YoloInference::YoloInference(const std::string& model_path,
                              const std::vector<std::string>& class_whitelist,
                              const std::string& device)
   : conf_threshold_(conf_threshold), nms_threshold_(nms_threshold),
-    class_whitelist_(class_whitelist), coco_names_(coco_names())
+    class_whitelist_(class_whitelist), coco_names_(coco_names()),
+    allocator_()
 {
   if (model_path.empty()) {
     throw std::runtime_error("[YoloInference] model_path 为空，无法加载模型");
   }
-  net_ = cv::dnn::readNetFromONNX(model_path);
 
-  // CUDA 后端：仅当 OpenCV 编译了 CUDA 且可用时启用，否则自动回退 CPU
+  // ── 初始化 ORT Env + Session ────────────────────────────────────
+  ort_env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "yolo_inference");
+  Ort::SessionOptions session_options;
+  session_options.SetIntraOpNumThreads(1);    // 单线程内并发，避免线程开销
+  session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+
+  // 可选：CUDA Execution Provider
   if (device.find("cuda") == 0) {
-    bool cuda_ok = false;
     try {
-      auto backends = cv::dnn::getAvailableBackends();
-      for (const auto& b : backends) {
-        if (b.first == cv::dnn::DNN_BACKEND_CUDA) cuda_ok = true;
-      }
-    } catch (...) { cuda_ok = false; }
-    if (cuda_ok) {
-      net_.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-      net_.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+      OrtCUDAProviderOptions cuda_options{};
+      session_options.AppendExecutionProvider_CUDA(cuda_options);
+    } catch (const Ort::Exception&) {
+      // CUDA 不可用，自动回退 CPU
     }
   }
+
+  // 创建 session（接受窄字符串或宽字符串）
+  ort_session_ = std::make_unique<Ort::Session>(
+    *ort_env_, model_path.c_str(), session_options);
+
+  // 输入输出名（用 allocator 释放）
+  for (size_t i = 0; i < ort_session_->GetInputCount(); ++i) {
+    auto name = ort_session_->GetInputNameAllocated(i, allocator_);
+    input_names_.emplace_back(name.get());
+  }
+  for (size_t i = 0; i < ort_session_->GetOutputCount(); ++i) {
+    auto name = ort_session_->GetOutputNameAllocated(i, allocator_);
+    output_names_.emplace_back(name.get());
+  }
+
+  // 输入 shape：[1, 3, 640, 640]（YOLOv8n 标准输入）
+  // 注意：从 ORT 1.24 GetShape() 读出来的可能是全 0（动态维度），
+  // 不能用作 Run 时的 shape 参数。直接硬编码。
+  input_shape_ = {1, 3, 640, 640};
+  input_h_ = 640;
+  input_w_ = 640;
 
   if (!class_whitelist_.empty()) use_whitelist_ = true;
 }
@@ -61,8 +96,9 @@ YoloInference::YoloInference(const std::string& model_path,
 vision_servo_msgs::msg::TargetArray YoloInference::detect(const cv::Mat& frame) {
   vision_servo_msgs::msg::TargetArray result;
   if (frame.empty()) return result;
+  if (!ort_session_) return result;
 
-  // ── 1. letterbox 预处理（保持长宽比，灰边填充） ───────────────────
+  // ── 1. letterbox 预处理（保持长宽比，灰边填充） ─────────────────
   const float scale = std::min(static_cast<float>(input_w_) / frame.cols,
                                static_cast<float>(input_h_) / frame.rows);
   const int new_w = static_cast<int>(frame.cols * scale);
@@ -74,50 +110,58 @@ vision_servo_msgs::msg::TargetArray YoloInference::detect(const cv::Mat& frame) 
   const int pad_y = (input_h_ - new_h) / 2;
   resized.copyTo(padded(cv::Rect(pad_x, pad_y, new_w, new_h)));
 
-  // ── 2. blob：/255 归一化 + BGR->RGB ──────────────────────────────
+  // ── 2. blob：/255 归一化 + BGR→RGB + HWC→CHW ──────────────────
   cv::Mat blob;
   cv::dnn::blobFromImage(padded, blob, 1.0 / 255.0,
                          cv::Size(input_w_, input_h_),
                          cv::Scalar(), true, false, CV_32F);
 
-  // ── 3. 前向推理 ─────────────────────────────────────────────────
-  net_.setInput(blob);
-  cv::Mat out = net_.forward();   // 常见 [1,84,8400]；部分导出为 [1,8400,84]
+  // ── 3. 构造 ORT 输入 tensor ─────────────────────────────────────
+  Ort::MemoryInfo mem_info = Ort::MemoryInfo::CreateCpu(
+    OrtAllocatorType::OrtArenaAllocator, OrtMemType::OrtMemTypeDefault);
+  Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+    mem_info, blob.ptr<float>(), blob.total(),
+    input_shape_.data(), input_shape_.size());
 
-  // 统一按 (channel, anchor) 读取，兼容两种输出布局
-  const int C = 84;  // 4 框坐标 + 80 类分数
-  const float* data = out.ptr<float>();  // 连续缓冲区首地址
-  const int num_anchors = static_cast<int>(out.total() / C);
+  // ── 4. Run（ORT 1.24 API: RunOptions, input_names, input_values, input_count,
+  //                   output_names, output_values, output_count） ──
+  // ORT 1.24 要求 const char* const* 形式的名字指针数组
+  std::vector<const char*> input_name_ptrs;
+  std::vector<const char*> output_name_ptrs;
+  for (const auto& n : input_names_)  input_name_ptrs.push_back(n.c_str());
+  for (const auto& n : output_names_) output_name_ptrs.push_back(n.c_str());
+  std::vector<Ort::Value> outputs(1);
+  ort_session_->Run(
+    Ort::RunOptions{nullptr},
+    input_name_ptrs.data(), &input_tensor, 1,
+    output_name_ptrs.data(), outputs.data(), 1);
 
-  // 判断内存排布：channels 在前 (ch*anchors+a) 还是 anchors 在前 (a*C+ch)
-  bool channel_major = true;
-  if (out.dims == 3 && out.size[1] == num_anchors && out.size[2] == C) {
-    channel_major = false;
-  }
-  auto at = [&](int ch, int a) -> float {
-    return channel_major ? data[ch * num_anchors + a] : data[a * C + ch];
-  };
-
-  const int num_classes = 80;
+  // ── 5. 解析输出 [1, 84, 8400] ─────────────────────────────────
+  // ORT 输出维度：[1, 84, 8400]
+  const float* data = outputs[0].GetTensorData<float>();
+  auto out_info = outputs[0].GetTensorTypeAndShapeInfo();
+  auto out_shape = out_info.GetShape();
+  const int C = (out_shape.size() >= 2) ? static_cast<int>(out_shape[1]) : 84;
+  const int num_anchors = static_cast<int>(out_info.GetElementCount() / C);
+  const int num_classes = C - 4;
 
   std::vector<cv::Rect> rects;
   std::vector<float> scores;
   std::vector<int> cls_ids;
 
-  // ── 4. 解析输出 + 置信度过滤 + 反 letterbox 还原像素坐标 ────────
   for (int a = 0; a < num_anchors; ++a) {
     float best = 0.f;
     int best_c = -1;
     for (int c = 0; c < num_classes; ++c) {
-      const float s = at(4 + c, a);
+      const float s = data[(4 + c) * num_anchors + a];  // [1,84,8400] → channel-major
       if (s > best) { best = s; best_c = c; }
     }
     if (best < conf_threshold_) continue;
 
-    const float xc = at(0, a);
-    const float yc = at(1, a);
-    const float w  = at(2, a);
-    const float h  = at(3, a);
+    const float xc = data[0 * num_anchors + a];
+    const float yc = data[1 * num_anchors + a];
+    const float w  = data[2 * num_anchors + a];
+    const float h  = data[3 * num_anchors + a];
 
     float x1 = (xc - w / 2.f - pad_x) / scale;
     float y1 = (yc - h / 2.f - pad_y) / scale;
@@ -146,13 +190,13 @@ vision_servo_msgs::msg::TargetArray YoloInference::detect(const cv::Mat& frame) 
     cls_ids.push_back(best_c);
   }
 
-  // ── 5. NMS 后处理 ───────────────────────────────────────────────
+  // ── 6. NMS 后处理 ──────────────────────────────────────────────
   std::vector<int> indices;
   cv::dnn::NMSBoxes(rects, scores, conf_threshold_, nms_threshold_, indices);
 
   for (const int i : indices) {
     vision_servo_msgs::msg::Target t;
-    t.id = -1;  // 跟踪节点负责分配稳定 ID
+    t.id = -1;
     const std::string name = (cls_ids[i] < static_cast<int>(coco_names_.size()))
         ? coco_names_[cls_ids[i]] : ("class" + std::to_string(cls_ids[i]));
     t.class_name = name;
@@ -166,7 +210,6 @@ vision_servo_msgs::msg::TargetArray YoloInference::detect(const cv::Mat& frame) 
     t.confidence = scores[i];
     t.width = static_cast<float>(rects[i].width);
     t.height = static_cast<float>(rects[i].height);
-    // 3D 位置/速度由下游 DepthEstimator / PerceptionPipeline 深度阶段填充
     result.targets.push_back(t);
   }
 

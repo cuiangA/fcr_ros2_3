@@ -2,18 +2,19 @@
  * @file detection_node.cpp
  * @brief YOLO 目标检测节点实现。
  *
- * 当前实现为占位代码（placeholder），模型加载和推理逻辑待填充。
- * 架构已完整：图像回调 → 预处理 → DNN 前向传递 → NMS 后处理 → 发布。
+ * 模型加载与推理：通过 YoloInference（OpenCV DNN 后端，YOLOv8 ONNX）执行。
+ * 图像回调 → cv_bridge → YoloInference::detect → TargetArray 发布。
  *
  * 支持的推理路径：
  *   - ONNX Runtime（通用，CPU/GPU）
  *   - TensorRT（NVIDIA GPU 专属，FP16/INT8 量化）
- *   - OpenCV DNN（轻量，适合原型验证）
+ *   - OpenCV DNN（轻量，适合原型验证，当前默认）
  */
 
 #include "perception_pkg/detection_node.hpp"
 #include "perception_pkg/qos.hpp"
 #include <cv_bridge/cv_bridge.h>
+#include <filesystem>
 
 namespace perception_pkg {
 
@@ -58,11 +59,28 @@ void DetectionNode::declare_parameters() {
 }
 
 void DetectionNode::load_model() {
-  // [占位] 实际模型加载逻辑（示例）：
-  //   cv::dnn::Net net = cv::dnn::readNetFromONNX(model_path_);
-  //   if (device_ != "cpu") { net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA); }
-  //   if (device_ == "cuda:0") { net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA_FP16); }
-  RCLCPP_INFO(get_logger(), "模型加载：[占位] %s", model_path_.c_str());
+  if (model_path_.empty()) {
+    RCLCPP_WARN(get_logger(),
+      "model_path 为空，检测节点将发布空 TargetArray（仅做链路验证）");
+    return;
+  }
+  if (!std::filesystem::exists(model_path_)) {
+    RCLCPP_ERROR(get_logger(),
+      "模型文件不存在: %s —— 检测节点将发布空 TargetArray", model_path_.c_str());
+    return;
+  }
+  try {
+    yolo_ = std::make_unique<YoloInference>(
+      model_path_, confidence_threshold_, nms_threshold_,
+      class_names_, device_);
+    RCLCPP_INFO(get_logger(),
+      "YOLOv8 模型已加载: %s (device=%s, conf=%.2f, nms=%.2f, classes=%zu)",
+      model_path_.c_str(), device_.c_str(),
+      confidence_threshold_, nms_threshold_, class_names_.size());
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(get_logger(), "加载 YOLOv8 模型失败: %s —— 将发布空 TargetArray", e.what());
+    yolo_.reset();
+  }
 }
 
 void DetectionNode::image_callback(const sensor_msgs::msg::Image::ConstSharedPtr& msg) {

@@ -35,6 +35,7 @@ find_package(image_transport REQUIRED)     # 高效的图像传输与订阅
 find_package(tf2_ros REQUIRED)             # TF 坐标变换支持
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(onnxruntime_vendor REQUIRED)  # ROS 官方 vendor: ONNX Runtime 1.24.x
 
 # ── QoS 工具库（INTERFACE，仅头文件） ──────────────────────────────
 add_library(perception_qos INTERFACE)
@@ -47,7 +48,8 @@ target_include_directories(detection_node PRIVATE include)
 ament_target_dependencies(detection_node
   rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge image_transport OpenCV
 )
-target_link_libraries(detection_node perception_qos)
+# ONNX Runtime（通过 ROS vendor 包）— yolo_inference.cpp 用
+target_link_libraries(detection_node onnxruntime::onnxruntime perception_qos)
 install(TARGETS detection_node DESTINATION lib/${PROJECT_NAME})
 
 # ── 跟踪节点（独立可执行文件） ────────────────────────────────────
@@ -74,7 +76,7 @@ target_include_directories(perception_pipeline PRIVATE include)
 ament_target_dependencies(perception_pipeline
   rclcpp rclcpp_components sensor_msgs vision_servo_msgs cv_bridge image_transport OpenCV
 )
-target_link_libraries(perception_pipeline perception_qos)
+target_link_libraries(perception_pipeline onnxruntime::onnxruntime perception_qos)
 # 注册为可组合节点，支持通过 ComposableNodeContainer 动态加载
 rclcpp_components_register_node(perception_pipeline
   PLUGIN "perception_pkg::PerceptionPipeline"
@@ -91,5 +93,8 @@ install(DIRECTORY include/ DESTINATION include)
 
 # ── 启动文件和配置 ────────────────────────────────────────────────
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+
+# ── 模型文件（供 detection_params.yaml 用 find-pkg-share 解析） ───────
+install(DIRECTORY models/ DESTINATION share/${PROJECT_NAME}/models)
 
 ament_package()

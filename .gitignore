@@ -29,6 +29,10 @@ perception_doc/
 project_documentation.md
 yolov8n.onnx
 yolov8n.pt
+pictures/
+pictures/*.jpg
+pictures/*.png
+src/perception_test_pkg/
 
 bags/
 classifier/bert_intent_output/model.safetensors

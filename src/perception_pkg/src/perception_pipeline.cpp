@@ -16,6 +16,7 @@
 #include "perception_pkg/qos.hpp"
 #include <cv_bridge/cv_bridge.h>
 #include <algorithm>
+#include <filesystem>
 
 namespace perception_pkg {
 
@@ -40,6 +41,28 @@ PerceptionPipeline::PerceptionPipeline(const rclcpp::NodeOptions& options)
 
   // ── 2. 初始化管线组件 ───────────────────────────────────────────
   tracker_ = std::make_unique<MultiObjectTracker>(max_age, min_hits, 0.3f);
+
+  // ── 2b. 加载 YOLOv8 模型（用于阶段 1 检测） ──────────────────────
+  if (model_path_.empty()) {
+    RCLCPP_WARN(get_logger(),
+      "model_path 为空，管线将发布空 TargetArray（仅做链路验证）");
+  } else if (!std::filesystem::exists(model_path_)) {
+    RCLCPP_ERROR(get_logger(),
+      "模型文件不存在: %s —— 管线将发布空 TargetArray", model_path_.c_str());
+  } else {
+    try {
+      std::vector<std::string> empty_whitelist;  // 显式指定类型，避免 {} 推导为 initializer_list
+      yolo_ = std::make_unique<YoloInference>(
+        model_path_, confidence_threshold_, nms_threshold_,
+        empty_whitelist, std::string("cpu"));
+      RCLCPP_INFO(get_logger(),
+        "YOLOv8 模型已加载 (pipeline): %s (conf=%.2f, nms=%.2f)",
+        model_path_.c_str(), confidence_threshold_, nms_threshold_);
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(get_logger(), "加载 YOLOv8 模型失败: %s", e.what());
+      yolo_.reset();
+    }
+  }
 
   // ── 3. 订阅者（启用进程内通信以实现零拷贝） ─────────────────────
   auto sub_opts = rclcpp::SubscriptionOptions();
