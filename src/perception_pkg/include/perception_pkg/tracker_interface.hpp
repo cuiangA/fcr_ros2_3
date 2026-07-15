@@ -1,11 +1,18 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 
 #include <vision_servo_msgs/msg/target_array.hpp>
 
 namespace perception_pkg {
+
+struct CameraMotion {
+  bool valid = false;
+  // Similarity/affine transform mapping previous-frame pixels to current-frame pixels.
+  std::array<float, 6> affine{1.0F, 0.0F, 0.0F, 0.0F, 1.0F, 0.0F};
+};
 
 /**
  * Common startup-selected 2D tracker interface.
@@ -22,6 +29,7 @@ public:
       const vision_servo_msgs::msg::TargetArray& detections) = 0;
   virtual vision_servo_msgs::msg::TargetArray get_tracks(
       uint64_t timestamp, const std::string& frame_id) = 0;
+  virtual void set_camera_motion(const CameraMotion& motion) { (void)motion; }
   virtual const char* name() const noexcept = 0;
 };
 

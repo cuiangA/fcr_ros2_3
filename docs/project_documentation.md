@@ -81,7 +81,7 @@ ROS2 架构
 | 1. ROS2 系统架构与接口层 | 基本完成 | 6 个 ROS 2 包、自定义 msg/srv/action、QoS 封装、分阶段 launch、YAML 参数体系 | 引入更明确的 Lifecycle/状态机管理，并为运镜 Action 和交互节点继续扩展接口 |
 | 2. 硬件驱动与设备抽象 | 云台实机链路已打通，Sony代码待验收，底盘/IMU待接入 | Sony CRSDK驱动及诊断、底盘/云台/IMU抽象接口、Factory Pattern、`use_sim` 实/仿切换、PlatformState聚合；RS2 bringup见 [`rs2_gimbal_bringup.md`](rs2_gimbal_bringup.md) | 验收Sony驱动，继续接入底盘、IMU、电池和奥比中光深度相机 |
 | 3. 图像采集与视觉感知 | 代码收口，待 Jetson/相机验收 | Sony CRSDK驱动、CameraInfo、YOLOv5/v8 ONNX/TensorRT、可测前后处理、按类别NMS、低延迟队列与诊断 | 完成Sony标定、已知图片对齐、ROS链路与30分钟稳定性验收 |
-| 4. 目标跟踪与状态估计 | ByteTrack代码收口，待实景验收 | Kalman+两阶段Hungarian关联、低分框恢复、TENTATIVE/CONFIRMED/LOST、目标选择与失败反馈 | 先验证Sony单相机遮挡与交叉场景；双相机融合另立阶段，长时重识别再评估ReID |
+| 4. 目标跟踪与状态估计 | ByteTrack V2代码收口，待实景验收 | XYAH Kalman、Mahalanobis门控、分状态复合代价Hungarian关联、LOST恢复、延迟分配ID、相机运动补偿 | 先验证Sony单相机遮挡与交叉场景；双相机融合另立阶段，长时重识别再评估ReID |
 | 5. 底盘与云台基础控制 | 云台键盘/语音实机可控，底盘待接入 | `/cmd_vel`、`GimbalCmd`、三轮全向运动学、云台绝对位置累加控制、低速限幅和平台反馈接口 | 固化云台限位和诊断，继续接入真实底盘、手动接管和速度档位 |
 | 6. 视觉伺服与跟随控制 | 核心完成 | MVP P 控制、IBVS、PBVS、50Hz ServoManager、控制分配、Action feedback | 补齐自动构图模板、HYBRID 模式、TF 驱动分配和实机闭环参数整定 |
 | 7. 优化控制与高级协同 | 接口预留 | MPC/RL 头文件、ControlAllocator 优化模式设想 | 接入 OSQP/qpOASES，实现 MPC 控制器和 QP 控制分配 |
@@ -303,10 +303,13 @@ YOLO 检测路线：
 
 ```text
 Detections
+  -> RGB sparse optical flow + RANSAC camera-motion compensation
   -> Kalman predict
-  -> 高置信度检测第一次 IoU + Hungarian association
+  -> CONFIRMED 高置信度复合代价 + Hungarian association
+  -> LOST 宽松门限恢复
   -> 低置信度检测恢复未匹配的活跃轨迹
   -> Kalman correct
+  -> 匿名候选连续确认后才分配新 ID
   -> tentative / confirmed / lost / removed
   -> TargetArray
 ```
@@ -314,10 +317,10 @@ Detections
 当前跟踪器使用 8 维状态：
 
 ```text
-[x, y, w, h, vx, vy, vw, vh]
+[cx, cy, aspect, h, vx, vy, va, vh]
 ```
 
-其中 `x,y,w,h` 来自检测框，速度项由卡尔曼滤波估计。检测节点默认把置信度不低于 0.10 的 person 候选交给跟踪器；低分候选只能恢复已有轨迹，不能创建新 ID。新轨迹连续命中 `min_confirm_hits` 后进入 CONFIRMED，短时未匹配目标进入 LOST，并通过 `lost_timeout_seconds` 按实际时间保留，当前默认恢复窗口为 2.5 秒。
+其中 `cx,cy,aspect,h` 来自检测框，速度项由卡尔曼滤波估计，并以 Mahalanobis 距离进行协方差门控。关联代价由 IoU、归一化中心距离和尺寸变化共同组成；CONFIRMED 与 LOST 使用不同门限。检测节点默认把置信度不低于 0.10 的 person 候选交给跟踪器；低分候选只能恢复已有轨迹，不能创建新 ID。新目标先作为不分配 ID 的匿名候选；默认隐藏 TENTATIVE 时，需要同时满足 `new_track_delay_frames` 和 `min_confirm_hits` 才会分配并发布 ID；靠近 LOST 预测位置的候选使用更长的抑制窗口。短时未匹配目标进入 LOST，并通过 `lost_timeout_seconds` 按实际时间保留，当前默认恢复窗口为 2.5 秒。Sony 图像还用于可关闭的稀疏光流全局运动补偿，估计失败时保持纯 Kalman 路径。
 
 目标选择路线：
 

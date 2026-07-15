@@ -21,6 +21,7 @@
 
   <!-- 依赖（depend = build_depend + exec_depend） -->
   <depend>rclcpp</depend>
+  <depend>builtin_interfaces</depend>
   <depend>rclcpp_components</depend>
   <depend>rcl_interfaces</depend>
   <depend>diagnostic_updater</depend>

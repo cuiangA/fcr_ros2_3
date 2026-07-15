@@ -10,6 +10,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(rcl_interfaces REQUIRED)
@@ -24,7 +25,7 @@ find_package(message_filters REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn video)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc dnn video calib3d)
 find_package(Threads REQUIRED)
 
 option(
@@ -95,11 +96,13 @@ add_executable(tracking_node
   src/tracking_node.cpp
   src/assignment_solver.cpp
   src/byte_tracker.cpp
+  src/camera_motion_estimator.cpp
   src/multi_object_tracker.cpp
   src/target_selector.cpp)
 target_include_directories(tracking_node PRIVATE include ${OpenCV_INCLUDE_DIRS})
 ament_target_dependencies(tracking_node
-  rclcpp rcl_interfaces diagnostic_updater diagnostic_msgs vision_servo_msgs)
+  rclcpp rcl_interfaces builtin_interfaces diagnostic_updater diagnostic_msgs sensor_msgs
+  vision_servo_msgs cv_bridge)
 target_link_libraries(tracking_node perception_qos ${OpenCV_LIBS})
 
 if(PERCEPTION_BUILD_LEGACY_FUSION)
@@ -169,7 +172,7 @@ if(BUILD_TESTING)
     # the diagnostic_updater-backed ROS node wrapper.  The test therefore
     # needs the diagnostic headers even though it exercises only the tracker.
     ament_target_dependencies(test_multi_object_tracker
-      rclcpp diagnostic_updater vision_servo_msgs)
+      rclcpp builtin_interfaces diagnostic_updater sensor_msgs vision_servo_msgs)
     target_link_libraries(test_multi_object_tracker ${OpenCV_LIBS})
   endif()
   ament_add_gtest(test_byte_tracker
@@ -180,6 +183,14 @@ if(BUILD_TESTING)
     target_include_directories(test_byte_tracker PRIVATE include ${OpenCV_INCLUDE_DIRS})
     ament_target_dependencies(test_byte_tracker vision_servo_msgs)
     target_link_libraries(test_byte_tracker ${OpenCV_LIBS})
+  endif()
+  ament_add_gtest(test_camera_motion_estimator
+    test/test_camera_motion_estimator.cpp
+    src/camera_motion_estimator.cpp)
+  if(TARGET test_camera_motion_estimator)
+    target_include_directories(test_camera_motion_estimator PRIVATE include ${OpenCV_INCLUDE_DIRS})
+    ament_target_dependencies(test_camera_motion_estimator vision_servo_msgs)
+    target_link_libraries(test_camera_motion_estimator ${OpenCV_LIBS})
   endif()
   ament_add_gtest(test_yolo_processing test/test_yolo_processing.cpp)
   if(TARGET test_yolo_processing)

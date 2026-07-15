@@ -28,6 +28,9 @@ def generate_launch_description():
             ),
         ),
         DeclareLaunchArgument("device", default_value="cpu"),
+        DeclareLaunchArgument(
+            "enable_camera_motion_compensation", default_value="true"
+        ),
     ]
 
     sony_node = Node(
@@ -62,6 +65,9 @@ def generate_launch_description():
             "device": LaunchConfiguration("device"),
             "enable_detection": "true",
             "enable_tracking": "true",
+            "enable_camera_motion_compensation": LaunchConfiguration(
+                "enable_camera_motion_compensation"
+            ),
         }.items(),
         condition=IfCondition(LaunchConfiguration("enable_perception")),
     )

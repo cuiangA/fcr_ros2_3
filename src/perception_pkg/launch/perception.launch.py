@@ -42,6 +42,11 @@ def generate_launch_description():
             description="2D tracker implementation: bytetrack or legacy_iou",
         ),
         DeclareLaunchArgument(
+            "enable_camera_motion_compensation",
+            default_value="true",
+            description="Use Sony RGB optical flow to compensate tracker predictions",
+        ),
+        DeclareLaunchArgument(
             "detection_params",
             default_value=PathJoinSubstitution(
                 [package_share, "config", "detection_params.yaml"]
@@ -93,9 +98,14 @@ def generate_launch_description():
             {
                 "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
                 "tracker_type": LaunchConfiguration("tracker_type"),
+                "enable_camera_motion_compensation": ParameterValue(
+                    LaunchConfiguration("enable_camera_motion_compensation"),
+                    value_type=bool,
+                ),
             },
         ],
         remappings=[
+            ("image", LaunchConfiguration("sony_image_topic")),
             ("detections", detections_topic),
             ("tracks", LaunchConfiguration("tracks_topic")),
         ],

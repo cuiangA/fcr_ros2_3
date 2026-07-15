@@ -76,6 +76,9 @@ def generate_launch_description():
             "device": detection_device,
             "confidence_threshold": conf_threshold,
             "tracker_type": tracker_type,
+            "enable_camera_motion_compensation": LaunchConfiguration(
+                "enable_camera_motion_compensation"
+            ),
             "enable_detection": effective_detection,
             "enable_tracking": LaunchConfiguration("enable_tracking"),
             "sony_image_topic": LaunchConfiguration("sony_image_topic"),
@@ -148,6 +151,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "tracker_type", default_value="bytetrack",
             description="二维跟踪器：bytetrack 或 legacy_iou",
+        ),
+        DeclareLaunchArgument(
+            "enable_camera_motion_compensation", default_value="true",
+            description="是否用Sony图像光流补偿相机/云台运动",
         ),
         DeclareLaunchArgument(
             "model_path",

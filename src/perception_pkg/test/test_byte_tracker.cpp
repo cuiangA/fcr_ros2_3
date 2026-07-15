@@ -45,14 +45,18 @@ perception_pkg::ByteTrackerConfig test_config()
   config.track_high_threshold = 0.50F;
   config.track_low_threshold = 0.10F;
   config.new_track_threshold = 0.60F;
-  config.first_match_min_iou = 0.20F;
+  config.confirmed_match_min_iou = 0.20F;
+  config.lost_match_min_iou = 0.10F;
   config.second_match_min_iou = 0.20F;
   config.unconfirmed_match_min_iou = 0.20F;
   config.duplicate_iou_threshold = 0.85F;
   config.lost_timeout_seconds = 1.0;
   config.min_confirm_hits = 1;
+  config.new_track_delay_frames = 1;
+  config.lost_new_track_suppression_frames = 1;
   config.fuse_detection_score = true;
   config.publish_tentative_tracks = true;
+  config.enable_mahalanobis_gating = false;
   return config;
 }
 
@@ -256,6 +260,122 @@ TEST(ByteTracker, TimestampRollbackKeepsFinitePrediction)
   ASSERT_EQ(tracks.targets.size(), 1U);
   EXPECT_TRUE(std::isfinite(tracks.targets.front().center[0]));
   EXPECT_TRUE(std::isfinite(tracks.targets.front().center[1]));
+}
+
+TEST(ByteTracker, DelaysIdentityAllocationUntilCandidateIsStable)
+{
+  auto config = test_config();
+  config.new_track_delay_frames = 2;
+  config.min_confirm_hits = 2;
+  config.publish_tentative_tracks = false;
+  perception_pkg::ByteTracker tracker(config);
+
+  auto first = make_frame(1'000'000'000ULL);
+  first.targets.push_back(make_detection(100.0F, 120.0F, 50.0F, 100.0F, 0.90F));
+  tracker.update(first);
+  EXPECT_TRUE(tracker.get_tracks(
+      1'000'000'000ULL, first.header.frame_id).targets.empty());
+
+  auto second = make_frame(1'033'000'000ULL);
+  second.targets.push_back(make_detection(102.0F, 120.0F, 50.0F, 100.0F, 0.90F));
+  tracker.update(second);
+  const auto tracks = tracker.get_tracks(
+      1'033'000'000ULL, second.header.frame_id);
+  ASSERT_EQ(tracks.targets.size(), 1U);
+  EXPECT_EQ(
+      tracks.targets.front().tracking_state,
+      vision_servo_msgs::msg::Target::TRACKING_STATE_CONFIRMED);
+}
+
+TEST(ByteTracker, LostTrackUsesRelaxedRecoveryGate)
+{
+  auto config = test_config();
+  config.confirmed_match_min_iou = 0.60F;
+  config.confirmed_center_gate = 0.10F;
+  config.lost_match_min_iou = 0.05F;
+  config.lost_center_gate = 1.50F;
+  perception_pkg::ByteTracker tracker(config);
+
+  auto first = make_frame(1'000'000'000ULL);
+  first.targets.push_back(make_detection(100.0F, 120.0F, 50.0F, 100.0F, 0.90F));
+  tracker.update(first);
+  const int original_id = tracker.get_tracks(
+      1'000'000'000ULL, first.header.frame_id).targets.front().id;
+
+  auto missing = make_frame(1'033'000'000ULL);
+  tracker.update(missing);
+
+  auto recovered = make_frame(1'066'000'000ULL);
+  recovered.targets.push_back(make_detection(135.0F, 120.0F, 50.0F, 100.0F, 0.90F));
+  tracker.update(recovered);
+  const auto tracks = tracker.get_tracks(
+      1'066'000'000ULL, recovered.header.frame_id);
+  ASSERT_EQ(tracks.targets.size(), 1U);
+  EXPECT_EQ(tracks.targets.front().id, original_id);
+  EXPECT_TRUE(tracks.targets.front().visible);
+}
+
+TEST(ByteTracker, AppliesCameraMotionToLostPrediction)
+{
+  perception_pkg::ByteTracker tracker(test_config());
+  auto first = make_frame(1'000'000'000ULL);
+  first.targets.push_back(make_detection(100.0F, 120.0F, 50.0F, 100.0F, 0.90F));
+  tracker.update(first);
+
+  perception_pkg::CameraMotion motion;
+  motion.valid = true;
+  motion.affine = {1.0F, 0.0F, 40.0F, 0.0F, 1.0F, 0.0F};
+  tracker.set_camera_motion(motion);
+  auto missing = make_frame(1'033'000'000ULL);
+  tracker.update(missing);
+
+  const auto tracks = tracker.get_tracks(
+      1'033'000'000ULL, missing.header.frame_id);
+  ASSERT_EQ(tracks.targets.size(), 1U);
+  EXPECT_NEAR(tracks.targets.front().center[0], 140.0F, 1.0F);
+  EXPECT_EQ(
+      tracks.targets.front().tracking_state,
+      vision_servo_msgs::msg::Target::TRACKING_STATE_LOST);
+}
+
+TEST(ByteTracker, DelaysReplacementIdNearUnrecoveredLostTrack)
+{
+  auto config = test_config();
+  config.new_track_delay_frames = 1;
+  config.lost_new_track_suppression_frames = 3;
+  config.lost_recovery_suppression = true;
+  config.enable_mahalanobis_gating = true;
+  config.lost_mahalanobis_gate = 0.01F;
+  perception_pkg::ByteTracker tracker(config);
+
+  auto first = make_frame(1'000'000'000ULL);
+  first.targets.push_back(make_detection(100.0F, 120.0F, 50.0F, 100.0F, 0.90F));
+  tracker.update(first);
+  const int original_id = tracker.get_tracks(
+      1'000'000'000ULL, first.header.frame_id).targets.front().id;
+
+  auto missing = make_frame(1'033'000'000ULL);
+  tracker.update(missing);
+  for (int index = 0; index < 2; ++index) {
+    const uint64_t stamp = 1'066'000'000ULL +
+        static_cast<uint64_t>(index) * 33'000'000ULL;
+    auto replacement = make_frame(stamp);
+    replacement.targets.push_back(
+        make_detection(160.0F, 120.0F, 50.0F, 100.0F, 0.90F));
+    tracker.update(replacement);
+    const auto tracks = tracker.get_tracks(stamp, replacement.header.frame_id);
+    ASSERT_EQ(tracks.targets.size(), 1U);
+    EXPECT_EQ(tracks.targets.front().id, original_id);
+    EXPECT_FALSE(tracks.targets.front().visible);
+  }
+
+  auto third = make_frame(1'132'000'000ULL);
+  third.targets.push_back(
+      make_detection(160.0F, 120.0F, 50.0F, 100.0F, 0.90F));
+  tracker.update(third);
+  const auto tracks = tracker.get_tracks(1'132'000'000ULL, third.header.frame_id);
+  ASSERT_EQ(tracks.targets.size(), 2U);
+  EXPECT_NE(tracks.targets.back().id, original_id);
 }
 
 }  // namespace

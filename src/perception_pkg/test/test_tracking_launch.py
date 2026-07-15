@@ -26,7 +26,9 @@ def generate_test_description():
             {
                 "tracker_type": "bytetrack",
                 "min_confirm_hits": 1,
+                "new_track_delay_frames": 1,
                 "lost_timeout_seconds": 0.2,
+                "enable_camera_motion_compensation": False,
                 "auto_select": True,
                 "class_filter": "person",
             }

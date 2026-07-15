@@ -9,7 +9,7 @@
 Sony image
   -> detection_node (YOLO ONNX)
   -> /perception/detections
-  -> tracking_node (ByteTrack: Kalman + two-stage Hungarian association)
+  -> tracking_node (ByteTrack V2: XYAH Kalman + state-specific Hungarian association)
   -> /perception/tracks
 ```
 
@@ -38,11 +38,18 @@ Sony image
 
 ## tracking_node
 
-- 8 维恒速 Kalman 状态：`[cx, cy, w, h, vx, vy, vw, vh]`。
-- 默认使用原生 C++ ByteTrack：高分框完成第一次 Hungarian 关联，未匹配的活跃
-  轨迹再用低分框恢复；低分框不会创建新 ID。
+- 8 维恒速 XYAH Kalman 状态：`[cx, cy, aspect, h, vx, vy, va, vh]`，并使用
+  Mahalanobis 门控排除与预测协方差明显冲突的匹配。
+- 默认使用原生 C++ ByteTrack V2：CONFIRMED、LOST 和 TENTATIVE 分阶段关联，
+  LOST 使用更宽松的恢复门限；代价同时考虑 IoU、中心距离和尺寸变化。
+- 低分框只能恢复已有 ID。高分新目标先作为匿名候选连续出现；默认至少满足
+  `new_track_delay_frames` 与 `min_confirm_hits` 后才分配 ID。LOST 轨迹附近的新
+  候选需要更长确认，减少遮挡后立即换号。
 - `TENTATIVE -> CONFIRMED -> LOST -> removed` 生命周期完整映射到现有消息；
   LOST 轨迹按秒而非按帧过期，默认保留 2.5 秒，摄像头帧率变化不会改变恢复窗口。
+- 默认不发布 TENTATIVE 轨迹，避免未经确认的 ID 进入目标选择和控制链。
+- 可选稀疏光流 + RANSAC 全局运动补偿订阅同一 Sony 图像，在机器人/云台运动时
+  先修正预测框；估计失败自动退回纯 Kalman 预测，不中断跟踪。
 - `tracker_type=legacy_iou` 可回退到升级前的单阶段 IoU 跟踪器进行 A/B 对照。
 - 默认自动选择面积与置信度综合得分最高的 `person`。
 - 目标选择服务：`/tracking_node/set_tracking_target`。
@@ -93,6 +100,14 @@ ros2 launch perception_pkg perception.launch.py \
 
 ```bash
 ros2 launch perception_pkg perception.launch.py tracker_type:=legacy_iou
+```
+
+若实机画面纹理太少或需要单独对比相机运动补偿，可只关闭 GMC，ByteTrack V2
+其余逻辑保持不变：
+
+```bash
+ros2 launch perception_pkg perception.launch.py \
+  enable_camera_motion_compensation:=false
 ```
 
 TensorRT 支持仅在检测到 `NvInfer.h`、`libnvinfer` 和 CUDA runtime 开发文件时

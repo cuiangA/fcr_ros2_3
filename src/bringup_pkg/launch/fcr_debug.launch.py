@@ -67,7 +67,13 @@ def generate_launch_description():
 
         Node(package="perception_pkg", executable="tracking_node",
              name="tracking_node", output="screen",
+             parameters=[
+                 PathJoinSubstitution(
+                     [perception_share, "config", "tracking_params.yaml"]
+                 )
+             ],
              remappings=[
+                 ("image", "/sony/image_raw"),
                  ("detections", "/perception/detections"),
                  ("tracks", "/perception/tracks"),
              ],

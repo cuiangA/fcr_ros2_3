@@ -3,10 +3,10 @@
  * @brief 多目标跟踪 — ByteTrack 默认实现与 legacy IoU 回退实现。
  *
  * 默认核心算法（ByteTracker）：
- *   1. 预测：对所有活跃轨迹执行卡尔曼滤波预测步
- *   2. 高分关联：高置信度检测与 CONFIRMED/LOST 轨迹全局匹配
+ *   1. 预测：XYAH 卡尔曼预测，可叠加稀疏光流全局相机运动补偿
+ *   2. 分状态关联：CONFIRMED 和 LOST 使用不同门限及复合几何代价
  *   3. 低分恢复：未匹配活跃轨迹与低置信度检测二次匹配
- *   4. 管理：确认、丢失、按时间删除以及重复轨迹清理
+ *   4. 管理：匿名候选延迟分配 ID、确认、丢失、删除与重复轨迹清理
  *
  * TrackingNode 将跟踪器封装为 ROS2 节点，提供：
  *   - 检测结果订阅 → 跟踪轨迹发布
@@ -28,9 +28,11 @@
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <opencv2/video/tracking.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <vision_servo_msgs/msg/target_array.hpp>
 #include <vision_servo_msgs/srv/set_tracking_target.hpp>
 
+#include "perception_pkg/camera_motion_estimator.hpp"
 #include "perception_pkg/target_selector.hpp"
 #include "perception_pkg/tracker_interface.hpp"
 
@@ -101,13 +103,17 @@ public:
 private:
   /// 检测结果回调 — 驱动跟踪器更新并发布跟踪轨迹
   void detection_callback(const vision_servo_msgs::msg::TargetArray::ConstSharedPtr& msg);
+  /// RGB image callback used only for optional global camera-motion estimation.
+  void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr& msg);
   void diagnostic_callback(diagnostic_updater::DiagnosticStatusWrapper& status);
   void record_latency(double elapsed_ms);
   rclcpp::Subscription<vision_servo_msgs::msg::TargetArray>::SharedPtr det_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
   rclcpp::Publisher<vision_servo_msgs::msg::TargetArray>::SharedPtr track_pub_;
   rclcpp::Service<vision_servo_msgs::srv::SetTrackingTarget>::SharedPtr tracking_srv_;
 
   std::unique_ptr<TrackerInterface> tracker_; ///< Startup-selected 2D tracker
+  std::unique_ptr<CameraMotionEstimator> camera_motion_estimator_;
   TargetSelector target_selector_;    ///< 目标锁定状态机
   std::string tracker_type_;          ///< Diagnostics and startup log name
   std::string camera_frame_;          ///< 相机坐标系名称
@@ -115,6 +121,10 @@ private:
   diagnostic_updater::Updater diagnostics_;
   double input_timeout_seconds_ = 2.0;
   double performance_log_period_ = 5.0;
+  bool enable_camera_motion_compensation_ = false;
+  uint64_t previous_detection_timestamp_ns_ = 0;
+  std::atomic<uint64_t> camera_motion_frames_{0};
+  std::atomic<uint64_t> valid_camera_motion_frames_{0};
   std::atomic<uint64_t> received_frames_{0};
   std::atomic<int64_t> last_input_steady_ns_{0};
   std::chrono::steady_clock::time_point stats_window_start_;

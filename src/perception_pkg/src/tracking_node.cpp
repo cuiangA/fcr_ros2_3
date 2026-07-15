@@ -16,6 +16,8 @@
 #include <stdexcept>
 #include <vector>
 
+#include <cv_bridge/cv_bridge.h>
+#include <builtin_interfaces/msg/time.hpp>
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 #include <rcl_interfaces/msg/floating_point_range.hpp>
 #include <rcl_interfaces/msg/integer_range.hpp>
@@ -66,6 +68,14 @@ double percentile_95(std::vector<double> samples)
   return samples[std::min(index, samples.size() - 1)];
 }
 
+uint64_t timestamp_ns(const builtin_interfaces::msg::Time& stamp)
+{
+  return stamp.sec >= 0
+      ? static_cast<uint64_t>(stamp.sec) * 1000000000ULL +
+        static_cast<uint64_t>(stamp.nanosec)
+      : 0;
+}
+
 }  // namespace
 
 TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
@@ -87,24 +97,62 @@ TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
       floating_descriptor("ByteTrack high-confidence split threshold.", 0.0, 1.0));
   this->declare_parameter("track_low_threshold", 0.10,
       floating_descriptor("ByteTrack lowest score accepted for recovery matching.", 0.0, 1.0));
-  this->declare_parameter("new_track_threshold", 0.60,
+  this->declare_parameter("new_track_threshold", 0.65,
       floating_descriptor("Minimum score allowed to create a new track.", 0.0, 1.0));
-  this->declare_parameter("first_match_min_iou", 0.30,
-      floating_descriptor("Minimum IoU for primary high-score association.", 0.0, 1.0));
-  this->declare_parameter("second_match_min_iou", 0.50,
+  this->declare_parameter("confirmed_match_min_iou", 0.25,
+      floating_descriptor("Minimum IoU for confirmed-track high-score association.", 0.0, 1.0));
+  this->declare_parameter("lost_match_min_iou", 0.10,
+      floating_descriptor("Relaxed minimum IoU for LOST-track recovery.", 0.0, 1.0));
+  this->declare_parameter("second_match_min_iou", 0.20,
       floating_descriptor("Minimum IoU for low-score recovery association.", 0.0, 1.0));
   this->declare_parameter("unconfirmed_match_min_iou", 0.30,
       floating_descriptor("Minimum IoU used to confirm tentative tracks.", 0.0, 1.0));
   this->declare_parameter("duplicate_iou_threshold", 0.85,
       floating_descriptor("IoU at which confirmed/lost tracks are considered duplicates.", 0.0, 1.0));
+  this->declare_parameter("confirmed_center_gate", 0.70,
+      floating_descriptor("Normalized center-distance gate for visible tracks.", 0.01, 10.0));
+  this->declare_parameter("lost_center_gate", 1.50,
+      floating_descriptor("Relaxed normalized center-distance gate for LOST tracks.", 0.01, 10.0));
+  this->declare_parameter("minimum_size_ratio", 0.50,
+      floating_descriptor("Minimum detection/prediction box-area ratio.", 0.01, 1.0));
+  this->declare_parameter("maximum_size_ratio", 2.00,
+      floating_descriptor("Maximum detection/prediction box-area ratio.", 1.0, 100.0));
+  this->declare_parameter("iou_cost_weight", 0.55,
+      floating_descriptor("IoU component weight in association cost.", 0.0, 100.0));
+  this->declare_parameter("center_cost_weight", 0.30,
+      floating_descriptor("Center-distance component weight in association cost.", 0.0, 100.0));
+  this->declare_parameter("size_cost_weight", 0.15,
+      floating_descriptor("Box-size component weight in association cost.", 0.0, 100.0));
+  this->declare_parameter("confirmed_mahalanobis_gate", 16.0,
+      floating_descriptor("Squared XYAH innovation gate for visible tracks.", 0.01, 1000.0));
+  this->declare_parameter("lost_mahalanobis_gate", 36.0,
+      floating_descriptor("Relaxed squared XYAH innovation gate for LOST tracks.", 0.01, 1000.0));
   this->declare_parameter("lost_timeout_seconds", 2.5,
       floating_descriptor("Seconds a confirmed track remains recoverable as LOST.", 0.0, 3600.0));
   this->declare_parameter("min_confirm_hits", 3,
       integer_descriptor("Consecutive high-confidence hits required for confirmation.", 1, 10000));
+  this->declare_parameter("new_track_delay_frames", 2,
+      integer_descriptor("Consecutive observations required before allocating a new ID.", 1, 10000));
+  this->declare_parameter("lost_new_track_suppression_frames", 10,
+      integer_descriptor("New-ID delay for detections near a recoverable LOST track.", 1, 10000));
   this->declare_parameter("fuse_detection_score", true,
       descriptor("Fuse high-box confidence into the primary association cost."));
-  this->declare_parameter("publish_tentative_tracks", true,
+  this->declare_parameter("publish_tentative_tracks", false,
       descriptor("Publish tentative tracks for observation without target selection."));
+  this->declare_parameter("enable_mahalanobis_gating", true,
+      descriptor("Reject associations inconsistent with the XYAH Kalman covariance."));
+  this->declare_parameter("lost_recovery_suppression", true,
+      descriptor("Delay new IDs near an unmatched LOST trajectory."));
+  this->declare_parameter("enable_camera_motion_compensation", true,
+      descriptor("Estimate RGB frame motion and compensate ByteTrack predictions."));
+  this->declare_parameter("gmc_max_width", 320,
+      integer_descriptor("Maximum image width used by motion estimation.", 32, 4096));
+  this->declare_parameter("gmc_max_features", 200,
+      integer_descriptor("Maximum background features used by motion estimation.", 4, 5000));
+  this->declare_parameter("gmc_min_inliers", 20,
+      integer_descriptor("Minimum RANSAC inliers required for valid camera motion.", 3, 5000));
+  this->declare_parameter("gmc_ransac_threshold", 2.0,
+      floating_descriptor("RANSAC reprojection threshold on the resized image.", 0.1, 100.0));
   this->declare_parameter("camera_frame", "",
       descriptor("Optional frame override; empty preserves the detector frame."));
   this->declare_parameter("auto_select", true,
@@ -129,22 +177,63 @@ TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
         this->get_parameter("track_low_threshold").as_double());
     config.new_track_threshold = static_cast<float>(
         this->get_parameter("new_track_threshold").as_double());
-    config.first_match_min_iou = static_cast<float>(
-        this->get_parameter("first_match_min_iou").as_double());
+    config.confirmed_match_min_iou = static_cast<float>(
+        this->get_parameter("confirmed_match_min_iou").as_double());
+    config.lost_match_min_iou = static_cast<float>(
+        this->get_parameter("lost_match_min_iou").as_double());
     config.second_match_min_iou = static_cast<float>(
         this->get_parameter("second_match_min_iou").as_double());
     config.unconfirmed_match_min_iou = static_cast<float>(
         this->get_parameter("unconfirmed_match_min_iou").as_double());
     config.duplicate_iou_threshold = static_cast<float>(
         this->get_parameter("duplicate_iou_threshold").as_double());
+    config.confirmed_center_gate = static_cast<float>(
+        this->get_parameter("confirmed_center_gate").as_double());
+    config.lost_center_gate = static_cast<float>(
+        this->get_parameter("lost_center_gate").as_double());
+    config.minimum_size_ratio = static_cast<float>(
+        this->get_parameter("minimum_size_ratio").as_double());
+    config.maximum_size_ratio = static_cast<float>(
+        this->get_parameter("maximum_size_ratio").as_double());
+    config.iou_cost_weight = static_cast<float>(
+        this->get_parameter("iou_cost_weight").as_double());
+    config.center_cost_weight = static_cast<float>(
+        this->get_parameter("center_cost_weight").as_double());
+    config.size_cost_weight = static_cast<float>(
+        this->get_parameter("size_cost_weight").as_double());
+    config.confirmed_mahalanobis_gate = static_cast<float>(
+        this->get_parameter("confirmed_mahalanobis_gate").as_double());
+    config.lost_mahalanobis_gate = static_cast<float>(
+        this->get_parameter("lost_mahalanobis_gate").as_double());
     config.lost_timeout_seconds =
         this->get_parameter("lost_timeout_seconds").as_double();
     config.min_confirm_hits = this->get_parameter("min_confirm_hits").as_int();
+    config.new_track_delay_frames =
+        this->get_parameter("new_track_delay_frames").as_int();
+    config.lost_new_track_suppression_frames =
+        this->get_parameter("lost_new_track_suppression_frames").as_int();
     config.fuse_detection_score =
         this->get_parameter("fuse_detection_score").as_bool();
     config.publish_tentative_tracks =
         this->get_parameter("publish_tentative_tracks").as_bool();
+    config.enable_mahalanobis_gating =
+        this->get_parameter("enable_mahalanobis_gating").as_bool();
+    config.lost_recovery_suppression =
+        this->get_parameter("lost_recovery_suppression").as_bool();
     tracker_ = std::make_unique<ByteTracker>(config);
+
+    enable_camera_motion_compensation_ =
+        this->get_parameter("enable_camera_motion_compensation").as_bool();
+    if (enable_camera_motion_compensation_) {
+      CameraMotionEstimatorConfig motion_config;
+      motion_config.max_width = this->get_parameter("gmc_max_width").as_int();
+      motion_config.max_features = this->get_parameter("gmc_max_features").as_int();
+      motion_config.min_inliers = this->get_parameter("gmc_min_inliers").as_int();
+      motion_config.ransac_reprojection_threshold =
+          this->get_parameter("gmc_ransac_threshold").as_double();
+      camera_motion_estimator_ =
+          std::make_unique<CameraMotionEstimator>(motion_config);
+    }
   } else if (tracker_type_ == "legacy_iou") {
     tracker_ = std::make_unique<MultiObjectTracker>(
         this->get_parameter("max_age").as_int(),
@@ -162,6 +251,12 @@ TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
   det_sub_ = this->create_subscription<vision_servo_msgs::msg::TargetArray>(
     "detections", qos::perception(),
     std::bind(&TrackingNode::detection_callback, this, std::placeholders::_1));
+
+  if (camera_motion_estimator_) {
+    image_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
+        "image", qos::image(),
+        std::bind(&TrackingNode::image_callback, this, std::placeholders::_1));
+  }
 
   track_pub_ = this->create_publisher<vision_servo_msgs::msg::TargetArray>(
     "tracks", qos::perception());
@@ -195,14 +290,21 @@ void TrackingNode::detection_callback(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now().time_since_epoch()).count(),
       std::memory_order_relaxed);
+  const uint64_t current_timestamp_ns = timestamp_ns(msg->header.stamp);
+  if (camera_motion_estimator_ && previous_detection_timestamp_ns_ > 0) {
+    const CameraMotion motion = camera_motion_estimator_->motion_between(
+        previous_detection_timestamp_ns_, current_timestamp_ns);
+    camera_motion_frames_.fetch_add(1, std::memory_order_relaxed);
+    if (motion.valid) {
+      valid_camera_motion_frames_.fetch_add(1, std::memory_order_relaxed);
+    }
+    tracker_->set_camera_motion(motion);
+  }
+  previous_detection_timestamp_ns_ = current_timestamp_ns;
   tracker_->update(*msg);
   const std::string output_frame = camera_frame_.empty() ? msg->header.frame_id : camera_frame_;
-  const uint64_t timestamp_ns = msg->header.stamp.sec >= 0
-      ? static_cast<uint64_t>(msg->header.stamp.sec) * 1000000000ULL +
-        static_cast<uint64_t>(msg->header.stamp.nanosec)
-      : 0;
   auto tracks = tracker_->get_tracks(
-      timestamp_ns, output_frame);
+      current_timestamp_ns, output_frame);
 
   tracks.header = msg->header;
   if (!camera_frame_.empty()) {
@@ -224,6 +326,22 @@ void TrackingNode::detection_callback(
     latency_ms = static_cast<double>((current_time - input_stamp).nanoseconds()) * 1.0e-6;
   }
   record_latency(latency_ms);
+}
+
+void TrackingNode::image_callback(const sensor_msgs::msg::Image::ConstSharedPtr& msg)
+{
+  try {
+    const auto image = cv_bridge::toCvShare(msg, "bgr8");
+    camera_motion_estimator_->add_frame(image->image, timestamp_ns(msg->header.stamp));
+  } catch (const cv_bridge::Exception& error) {
+    RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Camera-motion image conversion failed: %s", error.what());
+  } catch (const cv::Exception& error) {
+    RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Camera-motion estimation failed: %s", error.what());
+  }
 }
 
 void TrackingNode::record_latency(double elapsed_ms)
@@ -277,6 +395,11 @@ void TrackingNode::diagnostic_callback(
   status.add("tracker_type", tracker_type_);
   status.add("input_age_seconds", std::isfinite(input_age) ? input_age : -1.0);
   status.add("last_end_to_end_latency_ms", last_latency_ms_);
+  status.add("camera_motion_compensation", enable_camera_motion_compensation_);
+  status.add("camera_motion_frames", camera_motion_frames_.load(std::memory_order_relaxed));
+  status.add(
+      "valid_camera_motion_frames",
+      valid_camera_motion_frames_.load(std::memory_order_relaxed));
 }
 
 }  // namespace perception_pkg
