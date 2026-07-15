@@ -3,6 +3,10 @@ perception_visualizer_node:
     # Keep bounded because each entry holds a full-resolution Sony frame.
     sync_cache_size: 12
     status_publish_rate_hz: 5.0
+    # Keep the robot-side perception loop at full rate while bounding the
+    # WebSocket image stream to what Wi-Fi/mobile clients can consume live.
+    remote_publish_rate_hz: 10.0
+    remote_max_width: 960
     diagnostic_timeout_sec: 3.0
     optional_input_timeout_sec: 2.0
 

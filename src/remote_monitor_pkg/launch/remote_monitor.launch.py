@@ -42,6 +42,8 @@ def generate_launch_description():
         DeclareLaunchArgument("cmd_vel_topic", default_value="/cmd_vel"),
         DeclareLaunchArgument("gimbal_state_topic", default_value="/gimbal/status"),
         DeclareLaunchArgument("enable_future_inputs", default_value="false"),
+        DeclareLaunchArgument("remote_publish_rate_hz", default_value="10.0"),
+        DeclareLaunchArgument("remote_max_width", default_value="960"),
         DeclareLaunchArgument("yolo_model", default_value="yolov8n"),
         DeclareLaunchArgument("model_path", default_value=""),
         DeclareLaunchArgument("inference_backend", default_value="tensorrt"),
@@ -61,6 +63,12 @@ def generate_launch_description():
                 "inference_backend": LaunchConfiguration("inference_backend"),
                 "enable_future_inputs": ParameterValue(
                     LaunchConfiguration("enable_future_inputs"), value_type=bool
+                ),
+                "remote_publish_rate_hz": ParameterValue(
+                    LaunchConfiguration("remote_publish_rate_hz"), value_type=float
+                ),
+                "remote_max_width": ParameterValue(
+                    LaunchConfiguration("remote_max_width"), value_type=int
                 ),
             },
         ],

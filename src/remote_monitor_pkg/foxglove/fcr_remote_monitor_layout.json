@@ -28,8 +28,7 @@
         "poseEstimateThetaDeviation": 0.26179939
       },
       "imageMode": {
-        "imageTopic": "/perception/tracking_image/compressed",
-        "calibrationTopic": "/sony/camera_info"
+        "imageTopic": "/perception/tracking_image/compressed"
       },
       "foxglovePanelTitle": "Camera Image"
     },
@@ -93,4 +92,3 @@
     "splitPercentage": 64
   }
 }
-

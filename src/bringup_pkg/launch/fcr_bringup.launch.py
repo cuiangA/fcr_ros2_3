@@ -125,6 +125,10 @@ def generate_launch_description():
             "enable_future_inputs": LaunchConfiguration(
                 "enable_monitor_future_inputs"
             ),
+            "remote_publish_rate_hz": LaunchConfiguration(
+                "remote_publish_rate_hz"
+            ),
+            "remote_max_width": LaunchConfiguration("remote_max_width"),
         }.items(),
         condition=IfCondition(LaunchConfiguration("use_foxglove")),
     )
@@ -168,6 +172,14 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "enable_monitor_future_inputs", default_value="false",
             description="预留观察 target_3d/cmd_vel/gimbal_state，不发布控制指令",
+        ),
+        DeclareLaunchArgument(
+            "remote_publish_rate_hz", default_value="10.0",
+            description="仅限制Foxglove标注图帧率，不影响检测和跟踪",
+        ),
+        DeclareLaunchArgument(
+            "remote_max_width", default_value="960",
+            description="Foxglove标注图最大宽度；0表示保留原始宽度",
         ),
         DeclareLaunchArgument("use_mock_detector", default_value="false",
                               description="是否使用合成检测器（绕过 YOLO）"),

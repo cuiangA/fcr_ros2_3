@@ -300,6 +300,15 @@ private:
     status_publish_rate_hz_ = declare_parameter<double>(
         "status_publish_rate_hz", 5.0,
         floating_descriptor("Structured monitor status publication rate.", 0.2, 30.0));
+    remote_publish_rate_hz_ = declare_parameter<double>(
+        "remote_publish_rate_hz", 10.0,
+        floating_descriptor(
+            "Maximum annotated image rate; detection and tracking remain unthrottled.",
+            0.5, 30.0));
+    remote_max_width_ = declare_parameter<int>(
+        "remote_max_width", 960,
+        integer_descriptor(
+            "Maximum annotated image width; 0 preserves the source resolution.", 0, 7680));
     diagnostic_timeout_sec_ = declare_parameter<double>(
         "diagnostic_timeout_sec", 3.0,
         floating_descriptor("Age after which component diagnostics are marked stale.", 0.5, 60.0));
@@ -417,7 +426,25 @@ private:
     if (!render_without_subscribers_ && tracking_image_pub_.getNumSubscribers() == 0) {
       return;
     }
+    if (!reserve_remote_frame()) {
+      return;
+    }
     render_and_publish(image, detections, message);
+  }
+
+  bool reserve_remote_frame()
+  {
+    const auto current = SteadyClock::now();
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (last_remote_publish_.time_since_epoch().count() > 0) {
+      const double elapsed =
+          std::chrono::duration<double>(current - last_remote_publish_).count();
+      if (elapsed < 1.0 / remote_publish_rate_hz_) {
+        return false;
+      }
+    }
+    last_remote_publish_ = current;
+    return true;
   }
 
   void diagnostics_callback(
@@ -636,15 +663,29 @@ private:
         }
       }
 
-      {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        visualization_latency_ms_ = observed_latency_ms(image->header.stamp);
-      }
       if (draw_status_overlay_) {
         draw_status(canvas, make_monitor_message(image->header));
       }
 
-      const auto output = cv_bridge::CvImage(image->header, "bgr8", canvas).toImageMsg();
+      cv::Mat remote_canvas;
+      if (remote_max_width_ > 0 && canvas.cols > remote_max_width_) {
+        const double scale = static_cast<double>(remote_max_width_) /
+            static_cast<double>(canvas.cols);
+        const int output_height = std::max(
+            1, static_cast<int>(std::lround(static_cast<double>(canvas.rows) * scale)));
+        cv::resize(
+            canvas, remote_canvas, cv::Size(remote_max_width_, output_height),
+            0.0, 0.0, cv::INTER_AREA);
+      } else {
+        remote_canvas = canvas;
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        visualization_latency_ms_ = observed_latency_ms(image->header.stamp);
+      }
+      const auto output =
+          cv_bridge::CvImage(image->header, "bgr8", remote_canvas).toImageMsg();
       tracking_image_pub_.publish(*output);
     } catch (const cv_bridge::Exception& error) {
       RCLCPP_ERROR_THROTTLE(
@@ -726,8 +767,10 @@ private:
 
   size_t cache_size_ = 12;
   double status_publish_rate_hz_ = 5.0;
+  double remote_publish_rate_hz_ = 10.0;
   double diagnostic_timeout_sec_ = 3.0;
   double optional_input_timeout_sec_ = 2.0;
+  int remote_max_width_ = 960;
   bool draw_detections_ = true;
   bool draw_tracks_ = true;
   bool draw_status_overlay_ = true;
@@ -770,6 +813,7 @@ private:
   bool camera_connected_ = false;
   bool model_ready_ = false;
   uint64_t unmatched_track_frames_ = 0;
+  SteadyClock::time_point last_remote_publish_{};
 
   std::array<float, 3> target_3d_position_{};
   std::array<float, 3> cmd_vel_{};

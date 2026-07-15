@@ -18,6 +18,10 @@ ROS graph --> foxglove_bridge:8765 --> Foxglove Desktop / Web
 绘制，因此输出继续保留 Sony 图像的 `stamp` 和 `frame_id`。无线网络应在 Foxglove
 Image panel 选择 `/perception/tracking_image/compressed`，避免传输未压缩 BGR 图像。
 
+远程标注图默认限制为 10 FPS、最大宽度 960 像素，防止 WebSocket 客户端消费速度
+低于生产速度后形成数秒级积压。该限制只作用于观察图；Sony、YOLO、Tracker 仍按
+各自完整帧率运行。可通过 `remote_publish_rate_hz` 和 `remote_max_width` 调整。
+
 `inference_time_ms_estimate` 是图像采集时间到检测结果到达观察节点的链路测量，
 不是 TensorRT 内核 profiler 数据。这样可以保持观察层与 YOLO 实现完全解耦。
 
@@ -90,4 +94,3 @@ panel 名称重新添加，并使用同一组 topic/message path 即可重新导
 - `/gimbal/status` (`vision_servo_msgs/GimbalStatus`，对应需求中的 gimbal_state)
 
 这些订阅不会产生任何运动指令。
-
