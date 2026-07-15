@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -25,12 +26,13 @@
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
-#include <image_transport/image_transport.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <rcl_interfaces/msg/floating_point_range.hpp>
 #include <rcl_interfaces/msg/integer_range.hpp>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/header.hpp>
 #include <vision_servo_msgs/msg/gimbal_status.hpp>
@@ -247,16 +249,20 @@ public:
   {
     declare_parameters();
 
-    tracking_image_pub_ = image_transport::create_publisher(
-        this, "tracking_image", rclcpp::SensorDataQoS().keep_last(1).get_rmw_qos_profile());
+    auto remote_image_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    remote_image_qos.best_effort();
+    remote_image_qos.durability_volatile();
+    remote_image_qos.lifespan(
+        rclcpp::Duration(std::chrono::milliseconds(max_frame_age_ms_)));
+    tracking_image_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(
+        "tracking_image/compressed", remote_image_qos);
     monitor_pub_ = create_publisher<Monitor>(
         "monitor_status", rclcpp::QoS(rclcpp::KeepLast(10)).reliable());
 
     const auto sensor_qos = rclcpp::SensorDataQoS().keep_last(5);
-    image_sub_ = image_transport::create_subscription(
-        this, "image",
-        std::bind(&PerceptionVisualizerNode::image_callback, this, std::placeholders::_1),
-        "raw", sensor_qos.get_rmw_qos_profile());
+    image_sub_ = create_subscription<sensor_msgs::msg::Image>(
+        "image", sensor_qos,
+        std::bind(&PerceptionVisualizerNode::image_callback, this, std::placeholders::_1));
     detections_sub_ = create_subscription<TargetArray>(
         "detections", sensor_qos,
         std::bind(&PerceptionVisualizerNode::detections_callback, this, std::placeholders::_1));
@@ -283,15 +289,28 @@ public:
         std::chrono::duration<double>(1.0 / status_publish_rate_hz_));
     status_timer_ = create_wall_timer(
         period, std::bind(&PerceptionVisualizerNode::publish_monitor_status, this));
+    const auto render_period = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::duration<double>(1.0 / remote_publish_rate_hz_));
+    render_timer_ = create_wall_timer(
+        render_period, std::bind(&PerceptionVisualizerNode::publish_latest_frame, this));
 
     RCLCPP_INFO(
         get_logger(),
-        "Remote perception visualizer ready: model=%s backend=%s cache=%zu future_inputs=%s",
+        "Remote perception visualizer ready: model=%s backend=%s cache=%zu "
+        "remote=%.1fHz/%dpx/jpeg%d/max_age=%dms future_inputs=%s",
         yolo_model_.c_str(), inference_backend_.c_str(), cache_size_,
+        remote_publish_rate_hz_, remote_max_width_, jpeg_quality_, max_frame_age_ms_,
         enable_future_inputs_ ? "enabled" : "disabled");
   }
 
 private:
+  struct RenderBundle {
+    sensor_msgs::msg::Image::ConstSharedPtr image;
+    TargetArray::ConstSharedPtr detections;
+    TargetArray::ConstSharedPtr tracks;
+    uint64_t sequence = 0;
+  };
+
   void declare_parameters()
   {
     cache_size_ = static_cast<size_t>(declare_parameter<int>(
@@ -301,14 +320,22 @@ private:
         "status_publish_rate_hz", 5.0,
         floating_descriptor("Structured monitor status publication rate.", 0.2, 30.0));
     remote_publish_rate_hz_ = declare_parameter<double>(
-        "remote_publish_rate_hz", 10.0,
+        "remote_publish_rate_hz", 5.0,
         floating_descriptor(
             "Maximum annotated image rate; detection and tracking remain unthrottled.",
             0.5, 30.0));
     remote_max_width_ = declare_parameter<int>(
-        "remote_max_width", 960,
+        "remote_max_width", 640,
         integer_descriptor(
-            "Maximum annotated image width; 0 preserves the source resolution.", 0, 7680));
+             "Maximum annotated image width; 0 preserves the source resolution.", 0, 7680));
+    jpeg_quality_ = declare_parameter<int>(
+        "jpeg_quality", 55,
+        integer_descriptor("JPEG quality for the direct remote image stream.", 20, 95));
+    max_frame_age_ms_ = declare_parameter<int>(
+        "max_frame_age_ms", 300,
+        integer_descriptor(
+            "Drop an annotated frame instead of publishing it after this source age.",
+            50, 5000));
     diagnostic_timeout_sec_ = declare_parameter<double>(
         "diagnostic_timeout_sec", 3.0,
         floating_descriptor("Age after which component diagnostics are marked stale.", 0.5, 60.0));
@@ -412,8 +439,13 @@ private:
 
       // All three streams preserve the source stamp. Once tracks arrive, older
       // frames can no longer produce a more complete visualization.
-      image_cache_.erase(image_cache_.begin(), image_cache_.lower_bound(key));
-      detection_cache_.erase(detection_cache_.begin(), detection_cache_.lower_bound(key));
+      image_cache_.erase(image_cache_.begin(), image_cache_.upper_bound(key));
+      detection_cache_.erase(detection_cache_.begin(), detection_cache_.upper_bound(key));
+
+      if (image) {
+        latest_render_bundle_ = RenderBundle{
+            image, detections, message, ++next_render_sequence_};
+      }
     }
 
     if (!image) {
@@ -423,28 +455,38 @@ private:
           static_cast<unsigned long long>(unmatched_track_frames));
       return;
     }
-    if (!render_without_subscribers_ && tracking_image_pub_.getNumSubscribers() == 0) {
-      return;
-    }
-    if (!reserve_remote_frame()) {
-      return;
-    }
-    render_and_publish(image, detections, message);
   }
 
-  bool reserve_remote_frame()
+  void publish_latest_frame()
   {
-    const auto current = SteadyClock::now();
-    std::lock_guard<std::mutex> lock(state_mutex_);
-    if (last_remote_publish_.time_since_epoch().count() > 0) {
-      const double elapsed =
-          std::chrono::duration<double>(current - last_remote_publish_).count();
-      if (elapsed < 1.0 / remote_publish_rate_hz_) {
-        return false;
-      }
+    if (!render_without_subscribers_ &&
+        tracking_image_pub_->get_subscription_count() == 0) {
+      return;
     }
-    last_remote_publish_ = current;
-    return true;
+
+    std::optional<RenderBundle> bundle;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      if (!latest_render_bundle_ ||
+          latest_render_bundle_->sequence == last_render_sequence_) {
+        return;
+      }
+      bundle = latest_render_bundle_;
+      last_render_sequence_ = bundle->sequence;
+    }
+
+    const double source_age_ms = observed_latency_ms(bundle->image->header.stamp);
+    if (source_age_ms > static_cast<double>(max_frame_age_ms_)) {
+      ++stale_frame_drop_count_;
+      RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Dropping stale remote frame: age=%.1fms limit=%dms dropped=%llu",
+          source_age_ms, max_frame_age_ms_,
+          static_cast<unsigned long long>(stale_frame_drop_count_));
+      return;
+    }
+
+    render_and_publish(bundle->image, bundle->detections, bundle->tracks);
   }
 
   void diagnostics_callback(
@@ -680,13 +722,31 @@ private:
         remote_canvas = canvas;
       }
 
+      sensor_msgs::msg::CompressedImage output;
+      output.header = image->header;
+      output.format = "jpeg";
+      const std::vector<int> encode_parameters{
+          cv::IMWRITE_JPEG_QUALITY, jpeg_quality_};
+      if (!cv::imencode(".jpg", remote_canvas, output.data, encode_parameters)) {
+        RCLCPP_ERROR_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "Remote visualizer failed to encode a JPEG frame");
+        return;
+      }
+
+      // Encoding time is part of end-to-end age. Never hand an already stale
+      // frame to the bridge, even if it was fresh when this timer started.
+      const double publish_age_ms = observed_latency_ms(image->header.stamp);
+      if (publish_age_ms > static_cast<double>(max_frame_age_ms_)) {
+        ++stale_frame_drop_count_;
+        return;
+      }
       {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        visualization_latency_ms_ = observed_latency_ms(image->header.stamp);
+        visualization_latency_ms_ = publish_age_ms;
       }
-      const auto output =
-          cv_bridge::CvImage(image->header, "bgr8", remote_canvas).toImageMsg();
-      tracking_image_pub_.publish(*output);
+      tracking_image_pub_->publish(output);
+      ++published_remote_frame_count_;
     } catch (const cv_bridge::Exception& error) {
       RCLCPP_ERROR_THROTTLE(
           get_logger(), *get_clock(), 5000,
@@ -767,10 +827,12 @@ private:
 
   size_t cache_size_ = 12;
   double status_publish_rate_hz_ = 5.0;
-  double remote_publish_rate_hz_ = 10.0;
+  double remote_publish_rate_hz_ = 5.0;
   double diagnostic_timeout_sec_ = 3.0;
   double optional_input_timeout_sec_ = 2.0;
-  int remote_max_width_ = 960;
+  int remote_max_width_ = 640;
+  int jpeg_quality_ = 55;
+  int max_frame_age_ms_ = 300;
   bool draw_detections_ = true;
   bool draw_tracks_ = true;
   bool draw_status_overlay_ = true;
@@ -780,16 +842,17 @@ private:
   std::string model_path_;
   std::string inference_backend_{"tensorrt"};
 
-  image_transport::Subscriber image_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
   rclcpp::Subscription<TargetArray>::SharedPtr detections_sub_;
   rclcpp::Subscription<TargetArray>::SharedPtr tracks_sub_;
   rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_sub_;
   rclcpp::Subscription<TargetArray>::SharedPtr target_3d_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<vision_servo_msgs::msg::GimbalStatus>::SharedPtr gimbal_sub_;
-  image_transport::Publisher tracking_image_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr tracking_image_pub_;
   rclcpp::Publisher<Monitor>::SharedPtr monitor_pub_;
   rclcpp::TimerBase::SharedPtr status_timer_;
+  rclcpp::TimerBase::SharedPtr render_timer_;
 
   mutable std::mutex state_mutex_;
   std::map<int64_t, sensor_msgs::msg::Image::ConstSharedPtr> image_cache_;
@@ -813,7 +876,11 @@ private:
   bool camera_connected_ = false;
   bool model_ready_ = false;
   uint64_t unmatched_track_frames_ = 0;
-  SteadyClock::time_point last_remote_publish_{};
+  std::optional<RenderBundle> latest_render_bundle_;
+  uint64_t next_render_sequence_ = 0;
+  uint64_t last_render_sequence_ = 0;
+  uint64_t stale_frame_drop_count_ = 0;
+  uint64_t published_remote_frame_count_ = 0;
 
   std::array<float, 3> target_3d_position_{};
   std::array<float, 3> cmd_vel_{};

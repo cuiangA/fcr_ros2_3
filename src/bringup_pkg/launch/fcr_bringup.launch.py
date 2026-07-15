@@ -134,6 +134,8 @@ def generate_launch_description():
                 "remote_publish_rate_hz"
             ),
             "remote_max_width": LaunchConfiguration("remote_max_width"),
+            "jpeg_quality": LaunchConfiguration("remote_jpeg_quality"),
+            "max_frame_age_ms": LaunchConfiguration("remote_max_frame_age_ms"),
         }.items(),
         condition=IfCondition(LaunchConfiguration("use_foxglove")),
     )
@@ -187,12 +189,20 @@ def generate_launch_description():
             description="预留观察 target_3d/cmd_vel/gimbal_state，不发布控制指令",
         ),
         DeclareLaunchArgument(
-            "remote_publish_rate_hz", default_value="10.0",
+            "remote_publish_rate_hz", default_value="5.0",
             description="仅限制Foxglove标注图帧率，不影响检测和跟踪",
         ),
         DeclareLaunchArgument(
-            "remote_max_width", default_value="960",
+            "remote_max_width", default_value="640",
             description="Foxglove标注图最大宽度；0表示保留原始宽度",
+        ),
+        DeclareLaunchArgument(
+            "remote_jpeg_quality", default_value="55",
+            description="Foxglove标注图JPEG质量（20-95）",
+        ),
+        DeclareLaunchArgument(
+            "remote_max_frame_age_ms", default_value="300",
+            description="标注图超过此源时间戳年龄后直接丢弃，防止延迟积累",
         ),
         DeclareLaunchArgument("use_mock_detector", default_value="false",
                               description="是否使用合成检测器（绕过 YOLO）"),

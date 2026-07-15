@@ -42,8 +42,10 @@ def generate_launch_description():
         DeclareLaunchArgument("cmd_vel_topic", default_value="/cmd_vel"),
         DeclareLaunchArgument("gimbal_state_topic", default_value="/gimbal/status"),
         DeclareLaunchArgument("enable_future_inputs", default_value="false"),
-        DeclareLaunchArgument("remote_publish_rate_hz", default_value="10.0"),
-        DeclareLaunchArgument("remote_max_width", default_value="960"),
+        DeclareLaunchArgument("remote_publish_rate_hz", default_value="5.0"),
+        DeclareLaunchArgument("remote_max_width", default_value="640"),
+        DeclareLaunchArgument("jpeg_quality", default_value="55"),
+        DeclareLaunchArgument("max_frame_age_ms", default_value="300"),
         DeclareLaunchArgument("yolo_model", default_value="yolov8n"),
         DeclareLaunchArgument("model_path", default_value=""),
         DeclareLaunchArgument("inference_backend", default_value="tensorrt"),
@@ -70,6 +72,12 @@ def generate_launch_description():
                 "remote_max_width": ParameterValue(
                     LaunchConfiguration("remote_max_width"), value_type=int
                 ),
+                "jpeg_quality": ParameterValue(
+                    LaunchConfiguration("jpeg_quality"), value_type=int
+                ),
+                "max_frame_age_ms": ParameterValue(
+                    LaunchConfiguration("max_frame_age_ms"), value_type=int
+                ),
             },
         ],
         remappings=[
@@ -77,10 +85,8 @@ def generate_launch_description():
             ("detections", LaunchConfiguration("detections_topic")),
             ("tracks", LaunchConfiguration("tracks_topic")),
             ("diagnostics", "/diagnostics"),
-            ("tracking_image", LaunchConfiguration("tracking_image_topic")),
-            # image_transport appends the transport suffix before ROS name
-            # remapping. Remap the derived compressed topic explicitly so it
-            # stays under the configured perception namespace.
+            # This is a direct sensor_msgs/CompressedImage publisher. There is
+            # no raw remote image and no image_transport compression queue.
             (
                 "tracking_image/compressed",
                 PathJoinSubstitution(

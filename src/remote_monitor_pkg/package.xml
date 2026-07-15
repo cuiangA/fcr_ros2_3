@@ -18,11 +18,9 @@
   <depend>diagnostic_msgs</depend>
   <depend>vision_servo_msgs</depend>
   <depend>cv_bridge</depend>
-  <depend>image_transport</depend>
   <depend>libopencv-dev</depend>
 
   <exec_depend>foxglove_bridge</exec_depend>
-  <exec_depend>compressed_image_transport</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
