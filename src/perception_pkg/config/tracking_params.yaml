@@ -10,7 +10,7 @@ tracking_node:
     second_match_min_iou: 0.50
     unconfirmed_match_min_iou: 0.30
     duplicate_iou_threshold: 0.85
-    lost_timeout_seconds: 1.0
+    lost_timeout_seconds: 2.5       # Retain an established ID through short occlusion
     min_confirm_hits: 3
     fuse_detection_score: true
     publish_tentative_tracks: true

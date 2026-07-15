@@ -42,7 +42,7 @@ Sony image
 - 默认使用原生 C++ ByteTrack：高分框完成第一次 Hungarian 关联，未匹配的活跃
   轨迹再用低分框恢复；低分框不会创建新 ID。
 - `TENTATIVE -> CONFIRMED -> LOST -> removed` 生命周期完整映射到现有消息；
-  LOST 轨迹按秒而非按帧过期，摄像头帧率变化不会改变恢复窗口。
+  LOST 轨迹按秒而非按帧过期，默认保留 2.5 秒，摄像头帧率变化不会改变恢复窗口。
 - `tracker_type=legacy_iou` 可回退到升级前的单阶段 IoU 跟踪器进行 A/B 对照。
 - 默认自动选择面积与置信度综合得分最高的 `person`。
 - 目标选择服务：`/tracking_node/set_tracking_target`。

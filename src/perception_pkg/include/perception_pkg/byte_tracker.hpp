@@ -21,7 +21,7 @@ struct ByteTrackerConfig {
   float second_match_min_iou = 0.50F;
   float unconfirmed_match_min_iou = 0.30F;
   float duplicate_iou_threshold = 0.85F;
-  double lost_timeout_seconds = 1.0;
+  double lost_timeout_seconds = 2.5;
   int min_confirm_hits = 3;
   bool fuse_detection_score = true;
   bool publish_tentative_tracks = true;

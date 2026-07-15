@@ -97,7 +97,7 @@ TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
       floating_descriptor("Minimum IoU used to confirm tentative tracks.", 0.0, 1.0));
   this->declare_parameter("duplicate_iou_threshold", 0.85,
       floating_descriptor("IoU at which confirmed/lost tracks are considered duplicates.", 0.0, 1.0));
-  this->declare_parameter("lost_timeout_seconds", 1.0,
+  this->declare_parameter("lost_timeout_seconds", 2.5,
       floating_descriptor("Seconds a confirmed track remains recoverable as LOST.", 0.0, 3600.0));
   this->declare_parameter("min_confirm_hits", 3,
       integer_descriptor("Consecutive high-confidence hits required for confirmation.", 1, 10000));

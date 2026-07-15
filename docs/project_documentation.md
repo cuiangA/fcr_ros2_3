@@ -317,7 +317,7 @@ Detections
 [x, y, w, h, vx, vy, vw, vh]
 ```
 
-其中 `x,y,w,h` 来自检测框，速度项由卡尔曼滤波估计。检测节点默认把置信度不低于 0.10 的 person 候选交给跟踪器；低分候选只能恢复已有轨迹，不能创建新 ID。新轨迹连续命中 `min_confirm_hits` 后进入 CONFIRMED，短时未匹配目标进入 LOST，并通过 `lost_timeout_seconds` 按实际时间保留。
+其中 `x,y,w,h` 来自检测框，速度项由卡尔曼滤波估计。检测节点默认把置信度不低于 0.10 的 person 候选交给跟踪器；低分候选只能恢复已有轨迹，不能创建新 ID。新轨迹连续命中 `min_confirm_hits` 后进入 CONFIRMED，短时未匹配目标进入 LOST，并通过 `lost_timeout_seconds` 按实际时间保留，当前默认恢复窗口为 2.5 秒。
 
 目标选择路线：
 
