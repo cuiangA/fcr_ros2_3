@@ -225,15 +225,21 @@ TEST(ByteTracker, RejectsInvalidConfiguration)
   auto config = test_config();
   config.track_low_threshold = 0.8F;
   config.track_high_threshold = 0.5F;
-  EXPECT_THROW(perception_pkg::ByteTracker(config), std::invalid_argument);
+  EXPECT_THROW(
+      static_cast<void>(perception_pkg::ByteTracker{config}),
+      std::invalid_argument);
 
   config = test_config();
   config.new_track_threshold = 0.4F;
-  EXPECT_THROW(perception_pkg::ByteTracker(config), std::invalid_argument);
+  EXPECT_THROW(
+      static_cast<void>(perception_pkg::ByteTracker{config}),
+      std::invalid_argument);
 
   config = test_config();
   config.min_confirm_hits = 0;
-  EXPECT_THROW(perception_pkg::ByteTracker(config), std::invalid_argument);
+  EXPECT_THROW(
+      static_cast<void>(perception_pkg::ByteTracker{config}),
+      std::invalid_argument);
 }
 
 TEST(ByteTracker, TimestampRollbackKeepsFinitePrediction)
