@@ -48,6 +48,13 @@ bool TargetSelector::request(
       message = "Requested target_id is not a currently confirmed track";
       return false;
     }
+    if (target->tracking_state !=
+            vision_servo_msgs::msg::Target::TRACKING_STATE_CONFIRMED &&
+        target->tracking_state !=
+            vision_servo_msgs::msg::Target::TRACKING_STATE_LOST) {
+      message = "Requested target_id is still tentative";
+      return false;
+    }
     if (!class_name.empty() && target->class_name != class_name) {
       message = "Requested target_id does not match class_name";
       return false;
@@ -78,6 +85,8 @@ int TargetSelector::select_best_visible() const
   float best_score = -1.0F;
   for (const auto& target : latest_tracks_.targets) {
     if (!target.visible ||
+        target.tracking_state !=
+            vision_servo_msgs::msg::Target::TRACKING_STATE_CONFIRMED ||
         (!class_filter_.empty() && target.class_name != class_filter_)) {
       continue;
     }

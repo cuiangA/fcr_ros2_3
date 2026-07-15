@@ -26,6 +26,7 @@ def generate_launch_description():
     use_sim = LaunchConfiguration("use_sim")
     controller_plugin = LaunchConfiguration("controller_plugin")
     conf_threshold = LaunchConfiguration("confidence_threshold")
+    tracker_type = LaunchConfiguration("tracker_type")
     model_path = LaunchConfiguration("model_path")
     detection_device = LaunchConfiguration("detection_device")
     use_mock_detector = LaunchConfiguration("use_mock_detector")
@@ -74,6 +75,7 @@ def generate_launch_description():
             "model_path": model_path,
             "device": detection_device,
             "confidence_threshold": conf_threshold,
+            "tracker_type": tracker_type,
             "enable_detection": effective_detection,
             "enable_tracking": LaunchConfiguration("enable_tracking"),
             "sony_image_topic": LaunchConfiguration("sony_image_topic"),
@@ -141,8 +143,12 @@ def generate_launch_description():
         DeclareLaunchArgument("controller_plugin",
                               default_value="servo_control_pkg::IBVSController",
                               description="视觉伺服控制器插件类名"),
-        DeclareLaunchArgument("confidence_threshold", default_value="0.5",
-                              description="YOLO 检测置信度阈值"),
+        DeclareLaunchArgument("confidence_threshold", default_value="0.10",
+                              description="YOLO发布阈值；ByteTrack需要保留低分候选"),
+        DeclareLaunchArgument(
+            "tracker_type", default_value="bytetrack",
+            description="二维跟踪器：bytetrack 或 legacy_iou",
+        ),
         DeclareLaunchArgument(
             "model_path",
             default_value=PathJoinSubstitution(

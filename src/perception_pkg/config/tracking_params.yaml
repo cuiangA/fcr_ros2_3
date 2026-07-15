@@ -1,5 +1,21 @@
 tracking_node:
   ros__parameters:
+    tracker_type: "bytetrack"         # bytetrack (default) or legacy_iou
+
+    # ByteTrack: high-score association, then low-score recovery.
+    track_high_threshold: 0.50
+    track_low_threshold: 0.10
+    new_track_threshold: 0.60
+    first_match_min_iou: 0.30
+    second_match_min_iou: 0.50
+    unconfirmed_match_min_iou: 0.30
+    duplicate_iou_threshold: 0.85
+    lost_timeout_seconds: 1.0
+    min_confirm_hits: 3
+    fuse_detection_score: true
+    publish_tentative_tracks: true
+
+    # Legacy IoU tracker parameters, used only with tracker_type=legacy_iou.
     max_age: 15
     min_hits: 3
     iou_threshold: 0.3

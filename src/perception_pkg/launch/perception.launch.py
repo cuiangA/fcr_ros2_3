@@ -35,7 +35,12 @@ def generate_launch_description():
             default_value="cpu",
             description="Inference backend: cpu, cuda_fp16, cuda_fp32, or tensorrt",
         ),
-        DeclareLaunchArgument("confidence_threshold", default_value="0.5"),
+        DeclareLaunchArgument("confidence_threshold", default_value="0.10"),
+        DeclareLaunchArgument(
+            "tracker_type",
+            default_value="bytetrack",
+            description="2D tracker implementation: bytetrack or legacy_iou",
+        ),
         DeclareLaunchArgument(
             "detection_params",
             default_value=PathJoinSubstitution(
@@ -85,7 +90,10 @@ def generate_launch_description():
         output="screen",
         parameters=[
             LaunchConfiguration("tracking_params"),
-            {"use_sim_time": ParameterValue(use_sim_time, value_type=bool)},
+            {
+                "use_sim_time": ParameterValue(use_sim_time, value_type=bool),
+                "tracker_type": LaunchConfiguration("tracker_type"),
+            },
         ],
         remappings=[
             ("detections", detections_topic),

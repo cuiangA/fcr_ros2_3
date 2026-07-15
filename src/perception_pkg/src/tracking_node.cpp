@@ -1,12 +1,14 @@
 /**
  * @file tracking_node.cpp
- * @brief 多目标跟踪节点实现；MultiObjectTracker 核心逻辑在 multi_object_tracker.cpp 中共享。
+ * @brief 启动时选择 ByteTrack 或 legacy IoU 实现的 ROS 2 跟踪节点。
  */
 
 #include "perception_pkg/tracking_node.hpp"
+#include "perception_pkg/byte_tracker.hpp"
 #include "perception_pkg/qos.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <functional>
@@ -68,16 +70,41 @@ double percentile_95(std::vector<double> samples)
 
 TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
   : Node("tracking_node", options),
-    tracker_(/*max_age=*/30, /*min_hits=*/3, /*iou_threshold=*/0.3),
     target_selector_(true, "person"),
     diagnostics_(this)
 {
+  this->declare_parameter("tracker_type", "bytetrack",
+      descriptor("Startup tracker implementation: bytetrack or legacy_iou."));
+  // Legacy tracker parameters are kept for A/B comparison and rollback.
   this->declare_parameter("max_age", 30,
-      integer_descriptor("Maximum consecutive missed frames retained as LOST.", 0, 10000));
+      integer_descriptor("Legacy tracker missed frames retained as LOST.", 0, 10000));
   this->declare_parameter("min_hits", 3,
-      integer_descriptor("Consecutive detections required to confirm a track.", 1, 10000));
+      integer_descriptor("Legacy tracker consecutive hits required for confirmation.", 1, 10000));
   this->declare_parameter("iou_threshold", 0.3,
-      floating_descriptor("Minimum IoU used to associate a detection and track.", 0.0, 1.0));
+      floating_descriptor("Legacy tracker minimum association IoU.", 0.0, 1.0));
+
+  this->declare_parameter("track_high_threshold", 0.50,
+      floating_descriptor("ByteTrack high-confidence split threshold.", 0.0, 1.0));
+  this->declare_parameter("track_low_threshold", 0.10,
+      floating_descriptor("ByteTrack lowest score accepted for recovery matching.", 0.0, 1.0));
+  this->declare_parameter("new_track_threshold", 0.60,
+      floating_descriptor("Minimum score allowed to create a new track.", 0.0, 1.0));
+  this->declare_parameter("first_match_min_iou", 0.30,
+      floating_descriptor("Minimum IoU for primary high-score association.", 0.0, 1.0));
+  this->declare_parameter("second_match_min_iou", 0.50,
+      floating_descriptor("Minimum IoU for low-score recovery association.", 0.0, 1.0));
+  this->declare_parameter("unconfirmed_match_min_iou", 0.30,
+      floating_descriptor("Minimum IoU used to confirm tentative tracks.", 0.0, 1.0));
+  this->declare_parameter("duplicate_iou_threshold", 0.85,
+      floating_descriptor("IoU at which confirmed/lost tracks are considered duplicates.", 0.0, 1.0));
+  this->declare_parameter("lost_timeout_seconds", 1.0,
+      floating_descriptor("Seconds a confirmed track remains recoverable as LOST.", 0.0, 3600.0));
+  this->declare_parameter("min_confirm_hits", 3,
+      integer_descriptor("Consecutive high-confidence hits required for confirmation.", 1, 10000));
+  this->declare_parameter("fuse_detection_score", true,
+      descriptor("Fuse high-box confidence into the primary association cost."));
+  this->declare_parameter("publish_tentative_tracks", true,
+      descriptor("Publish tentative tracks for observation without target selection."));
   this->declare_parameter("camera_frame", "",
       descriptor("Optional frame override; empty preserves the detector frame."));
   this->declare_parameter("auto_select", true,
@@ -90,15 +117,46 @@ TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
       floating_descriptor("Seconds between tracking latency reports; 0 disables logs.", 0.0, 3600.0));
 
   camera_frame_ = this->get_parameter("camera_frame").as_string();
-  const int max_age = this->get_parameter("max_age").as_int();
-  const int min_hits = this->get_parameter("min_hits").as_int();
-  const float iou_threshold =
-      static_cast<float>(this->get_parameter("iou_threshold").as_double());
+  tracker_type_ = this->get_parameter("tracker_type").as_string();
+  std::transform(
+      tracker_type_.begin(), tracker_type_.end(), tracker_type_.begin(),
+      [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+  if (tracker_type_ == "bytetrack") {
+    ByteTrackerConfig config;
+    config.track_high_threshold = static_cast<float>(
+        this->get_parameter("track_high_threshold").as_double());
+    config.track_low_threshold = static_cast<float>(
+        this->get_parameter("track_low_threshold").as_double());
+    config.new_track_threshold = static_cast<float>(
+        this->get_parameter("new_track_threshold").as_double());
+    config.first_match_min_iou = static_cast<float>(
+        this->get_parameter("first_match_min_iou").as_double());
+    config.second_match_min_iou = static_cast<float>(
+        this->get_parameter("second_match_min_iou").as_double());
+    config.unconfirmed_match_min_iou = static_cast<float>(
+        this->get_parameter("unconfirmed_match_min_iou").as_double());
+    config.duplicate_iou_threshold = static_cast<float>(
+        this->get_parameter("duplicate_iou_threshold").as_double());
+    config.lost_timeout_seconds =
+        this->get_parameter("lost_timeout_seconds").as_double();
+    config.min_confirm_hits = this->get_parameter("min_confirm_hits").as_int();
+    config.fuse_detection_score =
+        this->get_parameter("fuse_detection_score").as_bool();
+    config.publish_tentative_tracks =
+        this->get_parameter("publish_tentative_tracks").as_bool();
+    tracker_ = std::make_unique<ByteTracker>(config);
+  } else if (tracker_type_ == "legacy_iou") {
+    tracker_ = std::make_unique<MultiObjectTracker>(
+        this->get_parameter("max_age").as_int(),
+        this->get_parameter("min_hits").as_int(),
+        static_cast<float>(this->get_parameter("iou_threshold").as_double()));
+  } else {
+    throw std::invalid_argument("tracker_type must be bytetrack or legacy_iou");
+  }
   const bool auto_select = this->get_parameter("auto_select").as_bool();
   const std::string target_class_filter = this->get_parameter("class_filter").as_string();
   input_timeout_seconds_ = this->get_parameter("input_timeout_seconds").as_double();
   performance_log_period_ = this->get_parameter("performance_log_period").as_double();
-  tracker_ = MultiObjectTracker(max_age, min_hits, iou_threshold);
   target_selector_ = TargetSelector(auto_select, target_class_filter);
 
   det_sub_ = this->create_subscription<vision_servo_msgs::msg::TargetArray>(
@@ -121,12 +179,12 @@ TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
       resp->assigned_id = target_selector_.active_id();
     });
 
-  diagnostics_.setHardwareID("multi_object_tracker");
+  diagnostics_.setHardwareID(tracker_type_);
   diagnostics_.add("input_and_latency", this, &TrackingNode::diagnostic_callback);
   stats_window_start_ = std::chrono::steady_clock::now();
 
-  RCLCPP_INFO(get_logger(), "跟踪节点已启动 (max_age=%d, min_hits=%d)",
-              max_age, min_hits);
+  RCLCPP_INFO(
+      get_logger(), "跟踪节点已启动 (tracker=%s)", tracker_->name());
 }
 
 void TrackingNode::detection_callback(
@@ -137,13 +195,13 @@ void TrackingNode::detection_callback(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now().time_since_epoch()).count(),
       std::memory_order_relaxed);
-  tracker_.update(*msg);
+  tracker_->update(*msg);
   const std::string output_frame = camera_frame_.empty() ? msg->header.frame_id : camera_frame_;
   const uint64_t timestamp_ns = msg->header.stamp.sec >= 0
       ? static_cast<uint64_t>(msg->header.stamp.sec) * 1000000000ULL +
         static_cast<uint64_t>(msg->header.stamp.nanosec)
       : 0;
-  auto tracks = tracker_.get_tracks(
+  auto tracks = tracker_->get_tracks(
       timestamp_ns, output_frame);
 
   tracks.header = msg->header;
@@ -216,6 +274,7 @@ void TrackingNode::diagnostic_callback(
     status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Tracker is receiving detections");
   }
   status.add("received_frames", received_frames_.load(std::memory_order_relaxed));
+  status.add("tracker_type", tracker_type_);
   status.add("input_age_seconds", std::isfinite(input_age) ? input_age : -1.0);
   status.add("last_end_to_end_latency_ms", last_latency_ms_);
 }

@@ -183,7 +183,7 @@ void DetectionNode::declare_parameters()
       integer_descriptor("Startup forward passes used to validate and warm the model.", 1, 20));
   confidence_threshold_ = static_cast<float>(
       declare_parameter<double>(
-          "confidence_threshold", 0.5,
+          "confidence_threshold", 0.10,
           floating_descriptor("Minimum final detection confidence.", 0.0, 1.0)));
   nms_threshold_ = static_cast<float>(
       declare_parameter<double>(

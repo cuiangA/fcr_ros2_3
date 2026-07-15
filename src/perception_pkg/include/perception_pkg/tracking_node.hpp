@@ -1,12 +1,12 @@
 /**
  * @file tracking_node.hpp
- * @brief 多目标跟踪 — 基于卡尔曼滤波和全局 IoU 分配的轻量跟踪器。
+ * @brief 多目标跟踪 — ByteTrack 默认实现与 legacy IoU 回退实现。
  *
- * 核心算法（MultiObjectTracker）：
+ * 默认核心算法（ByteTracker）：
  *   1. 预测：对所有活跃轨迹执行卡尔曼滤波预测步
- *   2. 关联：通过 IoU 代价矩阵和 Hungarian 算法进行全局匹配
- *   3. 更新：用匹配到的检测结果校正卡尔曼滤波器状态
- *   4. 管理：为新检测创建轨迹，清除超龄轨迹
+ *   2. 高分关联：高置信度检测与 CONFIRMED/LOST 轨迹全局匹配
+ *   3. 低分恢复：未匹配活跃轨迹与低置信度检测二次匹配
+ *   4. 管理：确认、丢失、按时间删除以及重复轨迹清理
  *
  * TrackingNode 将跟踪器封装为 ROS2 节点，提供：
  *   - 检测结果订阅 → 跟踪轨迹发布
@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -31,12 +32,13 @@
 #include <vision_servo_msgs/srv/set_tracking_target.hpp>
 
 #include "perception_pkg/target_selector.hpp"
+#include "perception_pkg/tracker_interface.hpp"
 
 namespace perception_pkg {
 
 /**
  * @class MultiObjectTracker
- * @brief 基于卡尔曼滤波的轻量多目标跟踪器。
+ * @brief 原有单阶段 IoU 跟踪器，仅用于对比和回退。
  *
  * 使用恒速运动模型的 8 维卡尔曼滤波器：
  *   状态向量 [x, y, w, h, vx, vy, vw, vh]
@@ -45,7 +47,7 @@ namespace perception_pkg {
  * 轨迹在连续 max_age 帧未被检测到时被删除；
  * 检测结果需连续命中 min_hits 帧后才被认为是稳定轨迹（防止假阳性）。
  */
-class MultiObjectTracker {
+class MultiObjectTracker final : public TrackerInterface {
 public:
   /// 单条跟踪轨迹的内部表示
   struct Track {
@@ -65,9 +67,11 @@ public:
   /// 对所有活跃轨迹执行卡尔曼预测步（在关联检测结果前调用）
   void predict(float dt_seconds);
   /// 用当前帧检测结果更新跟踪器状态（预测 + 关联 + 更新 + 管理）
-  void update(const vision_servo_msgs::msg::TargetArray& detections);
+  void update(const vision_servo_msgs::msg::TargetArray& detections) override;
   /// 获取所有已确认的跟踪轨迹（包括 max_age 窗口内的 LOST 轨迹）
-  vision_servo_msgs::msg::TargetArray get_tracks(uint64_t timestamp, const std::string& frame_id);
+  vision_servo_msgs::msg::TargetArray get_tracks(
+      uint64_t timestamp, const std::string& frame_id) override;
+  const char* name() const noexcept override { return "legacy_iou"; }
 
 private:
   /// 计算两个目标边界框的 IoU（交并比）
@@ -103,8 +107,9 @@ private:
   rclcpp::Publisher<vision_servo_msgs::msg::TargetArray>::SharedPtr track_pub_;
   rclcpp::Service<vision_servo_msgs::srv::SetTrackingTarget>::SharedPtr tracking_srv_;
 
-  MultiObjectTracker tracker_;       ///< 卡尔曼滤波跟踪器实例
+  std::unique_ptr<TrackerInterface> tracker_; ///< Startup-selected 2D tracker
   TargetSelector target_selector_;    ///< 目标锁定状态机
+  std::string tracker_type_;          ///< Diagnostics and startup log name
   std::string camera_frame_;          ///< 相机坐标系名称
   mutable std::mutex state_mutex_;    ///< 保护服务与检测回调共享的目标选择状态
   diagnostic_updater::Updater diagnostics_;

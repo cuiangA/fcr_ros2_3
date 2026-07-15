@@ -24,9 +24,9 @@ def generate_test_description():
         name="tracking_node",
         parameters=[
             {
-                "max_age": 2,
-                "min_hits": 1,
-                "iou_threshold": 0.2,
+                "tracker_type": "bytetrack",
+                "min_confirm_hits": 1,
+                "lost_timeout_seconds": 0.2,
                 "auto_select": True,
                 "class_filter": "person",
             }

@@ -627,8 +627,8 @@ C 组给 vibe coder 的阅读提示词：
 | 模块 | 当前状态 | 说明 |
 | --- | --- | --- |
 | DetectionNode | 代码收口，待 Jetson 验收 | YOLOv5/v8 ONNX/TensorRT、letterbox、按类别 NMS、后台最新帧推理与诊断 |
-| TrackingNode | 代码收口，待实景验收 | 发布 CONFIRMED/LOST 轨迹、目标选择服务和延迟诊断 |
-| MultiObjectTracker | 代码收口 | Kalman + Hungarian 全局 IoU 关联、连续命中确认、类别一致匹配 |
+| TrackingNode | ByteTrack代码收口，待实景验收 | 发布 TENTATIVE/CONFIRMED/LOST 轨迹、目标选择服务和延迟诊断；可回退 legacy_iou |
+| ByteTracker | 代码收口 | Kalman + 高低分两阶段 Hungarian 关联、低分恢复、按时间过期、类别一致匹配和重复轨迹清理 |
 | 深度/双相机融合 | 本轮不处理 | 原 DepthEstimator 仅保留仿真兼容，不能作为独立 Sony/奥比中光融合方案 |
 | Sony 相机真实接入 | 代码收口，待实机验收 | CRSDK 本地安装、重连、CameraInfo、时间戳和诊断已实现 |
 | YOLO 推理 | 代码收口，待 Jetson 验收 | Windows 已验证 ONNX；Jetson 使用本机生成的 TensorRT engine |

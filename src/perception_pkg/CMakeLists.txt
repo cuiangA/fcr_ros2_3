@@ -93,6 +93,8 @@ endif()
 
 add_executable(tracking_node
   src/tracking_node.cpp
+  src/assignment_solver.cpp
+  src/byte_tracker.cpp
   src/multi_object_tracker.cpp
   src/target_selector.cpp)
 target_include_directories(tracking_node PRIVATE include ${OpenCV_INCLUDE_DIRS})
@@ -113,6 +115,7 @@ if(PERCEPTION_BUILD_LEGACY_FUSION)
 
   add_library(perception_pipeline SHARED
     src/perception_pipeline.cpp
+    src/assignment_solver.cpp
     src/multi_object_tracker.cpp)
   target_include_directories(perception_pipeline PRIVATE include ${OpenCV_INCLUDE_DIRS})
   ament_target_dependencies(perception_pipeline
@@ -158,6 +161,7 @@ if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   ament_add_gtest(test_multi_object_tracker
     test/test_multi_object_tracker.cpp
+    src/assignment_solver.cpp
     src/multi_object_tracker.cpp)
   if(TARGET test_multi_object_tracker)
     target_include_directories(test_multi_object_tracker PRIVATE include ${OpenCV_INCLUDE_DIRS})
@@ -167,6 +171,15 @@ if(BUILD_TESTING)
     ament_target_dependencies(test_multi_object_tracker
       rclcpp diagnostic_updater vision_servo_msgs)
     target_link_libraries(test_multi_object_tracker ${OpenCV_LIBS})
+  endif()
+  ament_add_gtest(test_byte_tracker
+    test/test_byte_tracker.cpp
+    src/assignment_solver.cpp
+    src/byte_tracker.cpp)
+  if(TARGET test_byte_tracker)
+    target_include_directories(test_byte_tracker PRIVATE include ${OpenCV_INCLUDE_DIRS})
+    ament_target_dependencies(test_byte_tracker vision_servo_msgs)
+    target_link_libraries(test_byte_tracker ${OpenCV_LIBS})
   endif()
   ament_add_gtest(test_yolo_processing test/test_yolo_processing.cpp)
   if(TARGET test_yolo_processing)

@@ -10,7 +10,9 @@ detection_node:
     input_height: 640
     max_detections: 100
     warmup_runs: 1
-    confidence_threshold: 0.5
+    # Keep low-score person boxes for ByteTrack's recovery stage. The tracker
+    # still requires new_track_threshold before a box may create a new ID.
+    confidence_threshold: 0.10
     nms_threshold: 0.45
     performance_log_period: 5.0      # seconds; 0 disables periodic statistics
     input_timeout_seconds: 2.0       # warn on /sony/image_raw silence

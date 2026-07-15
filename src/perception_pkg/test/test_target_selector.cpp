@@ -67,6 +67,17 @@ TEST(TargetSelector, KeepsLockedIdDuringShortLostWindow)
   EXPECT_EQ(selector.update(tracks), 7);
 }
 
+TEST(TargetSelector, DoesNotAutoSelectTentativeTrack)
+{
+  perception_pkg::TargetSelector selector(true, "person");
+  vision_servo_msgs::msg::TargetArray tracks;
+  auto tentative = target(7, "person", true, 100.0F, 0.9F);
+  tentative.tracking_state =
+      vision_servo_msgs::msg::Target::TRACKING_STATE_TENTATIVE;
+  tracks.targets.push_back(tentative);
+  EXPECT_EQ(selector.update(tracks), -1);
+}
+
 TEST(TargetSelector, ManualModeDoesNotClaimAutoSelectIsEnabled)
 {
   perception_pkg::TargetSelector selector(false, "person");

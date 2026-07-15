@@ -68,7 +68,7 @@ private:
   int input_height_ = 640;
   int max_detections_ = 100;
   int warmup_runs_ = 1;
-  float confidence_threshold_ = 0.5F;
+  float confidence_threshold_ = 0.10F;
   float nms_threshold_ = 0.45F;
   double performance_log_period_ = 5.0;
   double input_timeout_seconds_ = 2.0;
