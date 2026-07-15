@@ -102,8 +102,12 @@ def generate_launch_description():
                     LaunchConfiguration("foxglove_port"), value_type=int
                 ),
                 "topic_whitelist": [
-                    "^/sony/(?:image_raw|camera_info)(?:/.*)?$",
-                    "^/perception/(?:detections|tracks|tracking_image|monitor_status|targets_3d)(?:/.*)?$",
+                    # Never expose raw Image topics over the robot Wi-Fi link.
+                    # A stale Foxglove panel must not be able to re-subscribe
+                    # to multi-megabyte BGR frames and build a send backlog.
+                    "^/sony/camera_info$",
+                    "^/perception/tracking_image/compressed$",
+                    "^/perception/(?:detections|tracks|monitor_status|targets_3d)$",
                     "^/diagnostics$",
                     "^/rosout$",
                     "^/cmd_vel$",
@@ -119,11 +123,12 @@ def generate_launch_description():
                 "asset_uri_allowlist": ["^$"],
                 "capabilities": ["connectionGraph"],
                 "best_effort_qos_topic_whitelist": [
-                    "^/sony/image_raw(?:/.*)?$",
-                    "^/perception/tracking_image(?:/.*)?$",
+                    "^/perception/tracking_image/compressed$",
                 ],
                 "min_qos_depth": 1,
-                "max_qos_depth": 5,
+                # Monitoring is latest-frame-only. Deeper queues convert a
+                # temporary Wi-Fi slowdown into seconds of visible latency.
+                "max_qos_depth": 1,
                 "num_threads": 2,
                 "include_hidden": False,
                 "tls": False,
