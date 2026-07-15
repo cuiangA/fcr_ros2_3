@@ -70,6 +70,15 @@ def generate_launch_description():
             ("tracks", LaunchConfiguration("tracks_topic")),
             ("diagnostics", "/diagnostics"),
             ("tracking_image", LaunchConfiguration("tracking_image_topic")),
+            # image_transport appends the transport suffix before ROS name
+            # remapping. Remap the derived compressed topic explicitly so it
+            # stays under the configured perception namespace.
+            (
+                "tracking_image/compressed",
+                PathJoinSubstitution(
+                    [LaunchConfiguration("tracking_image_topic"), "compressed"]
+                ),
+            ),
             ("monitor_status", LaunchConfiguration("monitor_status_topic")),
             ("target_3d", LaunchConfiguration("target_3d_topic")),
             ("cmd_vel", LaunchConfiguration("cmd_vel_topic")),
