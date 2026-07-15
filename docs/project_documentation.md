@@ -57,6 +57,7 @@ ROS2 架构
 | --- | --- | --- |
 | `vision_servo_msgs` | 1、4、5、6、8 | 定义目标、平台状态、云台命令、伺服状态、模式切换服务和视觉伺服 Action |
 | `perception_pkg` | 3、4 | Sony 图像输入、YOLO ONNX 检测、多目标跟踪；深度融合留待后续阶段 |
+| `remote_monitor_pkg` | 9、10 | 只读视觉标注、结构化健康/性能状态、Foxglove 局域网桥接与默认布局 |
 | `servo_control_pkg` | 5、6、7、8 | MVP 跟拍、IBVS/PBVS、控制器插件、控制分配、VisualServo Action |
 | `robot_platform_pkg` | 2、5、10 | 底盘、云台、IMU、里程计、平台状态聚合、真实/仿真硬件抽象 |
 | `simulation_pkg` | 3、4、5、6、10 | Gazebo 模型、目标仿真、相机仿真、mock 检测、2D 闭环仿真 |
@@ -735,6 +736,14 @@ raw command
 - 离线统计图像误差、距离误差、控制平滑度和目标丢失次数。
 - RViz 显示 TF、目标位置、机器人轨迹和 marker。
 - Foxglove 展示时间序列和 Web 监控界面。
+
+远程视觉观察层由 `remote_monitor_pkg` 提供。它按图像时间戳匹配
+`/sony/image_raw`、`/perception/detections` 与 `/perception/tracks`，输出保留原始
+`stamp` 和 `frame_id` 的 `/perception/tracking_image`，并通过
+`/perception/monitor_status` 发布相机、检测器、跟踪器健康状态以及 FPS、延迟和
+当前目标信息。`foxglove_bridge` 默认监听 `0.0.0.0:8765`，只开放观察白名单，
+不允许远程发布控制话题、调用服务或修改参数。无线查看优先选择
+`/perception/tracking_image/compressed`。
 
 常用指标：
 

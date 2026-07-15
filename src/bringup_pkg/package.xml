@@ -13,6 +13,7 @@
 
   <!-- 运行时依赖：启动文件会引用这些包的节点和资源 -->
   <exec_depend>perception_pkg</exec_depend>
+  <exec_depend>remote_monitor_pkg</exec_depend>
   <exec_depend>sony_camera_pkg</exec_depend>
   <exec_depend>servo_control_pkg</exec_depend>
   <exec_depend>robot_platform_pkg</exec_depend>

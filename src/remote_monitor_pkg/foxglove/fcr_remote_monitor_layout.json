@@ -1,0 +1,96 @@
+{
+  "configById": {
+    "Image!fcrcamera": {
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 60,
+        "target": [0, 0, 0],
+        "targetOffset": [0, 0, 0],
+        "targetOrientation": [0, 0, 0, 1],
+        "thetaOffset": 60,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/foxglove/cursor/pose",
+        "pointTopic": "/foxglove/cursor/click",
+        "poseEstimateTopic": "/foxglove/cursor/pose_estimate",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "imageMode": {
+        "imageTopic": "/perception/tracking_image/compressed",
+        "calibrationTopic": "/sony/camera_info"
+      },
+      "foxglovePanelTitle": "Camera Image"
+    },
+    "TopicGraph!fcrtopics": {
+      "foxglovePanelTitle": "ROS Topic Tree"
+    },
+    "RawMessages!fcrstatus": {
+      "topicPath": "/perception/monitor_status",
+      "diffEnabled": false,
+      "fontSize": 14,
+      "foxglovePanelTitle": "Robot Status"
+    },
+    "Plot!fcrperformance": {
+      "paths": [
+        {
+          "value": "/perception/monitor_status.detection_fps",
+          "enabled": true,
+          "timestampMethod": "headerStamp"
+        },
+        {
+          "value": "/perception/monitor_status.detection_latency_ms",
+          "enabled": true,
+          "timestampMethod": "headerStamp"
+        },
+        {
+          "value": "/perception/monitor_status.tracking_latency_ms",
+          "enabled": true,
+          "timestampMethod": "headerStamp"
+        }
+      ],
+      "showXAxisLabels": true,
+      "showYAxisLabels": true,
+      "showLegend": true,
+      "legendDisplay": "floating",
+      "showPlotValuesInLegend": true,
+      "isSynced": true,
+      "xAxisVal": "timestamp",
+      "sidebarDimension": 280,
+      "foxglovePanelTitle": "Perception Performance"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": {
+    "first": {
+      "first": "Image!fcrcamera",
+      "second": "TopicGraph!fcrtopics",
+      "direction": "column",
+      "splitPercentage": 68
+    },
+    "second": {
+      "first": "RawMessages!fcrstatus",
+      "second": "Plot!fcrperformance",
+      "direction": "column",
+      "splitPercentage": 48
+    },
+    "direction": "row",
+    "splitPercentage": 64
+  }
+}
+

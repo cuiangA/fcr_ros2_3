@@ -6,7 +6,7 @@ FCR 生产环境一键启动文件。
   1. t=0s:  机器人平台（底盘/云台/IMU/里程计硬件驱动）
   2. t=2s:  感知管线（检测 + 跟踪）—— 等待相机驱动就绪
   3. t=3s:  伺服控制 —— 等待感知输出 + 平台状态反馈就绪
-  4. t=4s:  可视化（RViz2 + Foxglove Bridge，可选）
+  4. t=4s:  可视化（RViz2 + 远程感知监控/Foxglove，可选）
 
 用法：
   ros2 launch bringup_pkg fcr_bringup.launch.py use_sim:=false use_rviz:=true
@@ -37,6 +37,7 @@ def generate_launch_description():
     servo_share = FindPackageShare("servo_control_pkg")
     platform_share = FindPackageShare("robot_platform_pkg")
     sony_share = FindPackageShare("sony_camera_pkg")
+    remote_monitor_share = FindPackageShare("remote_monitor_pkg")
 
     # ── 1. 机器人平台（硬件驱动层） ─────────────────────────
     platform_launch = IncludeLaunchDescription(
@@ -106,12 +107,25 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("use_rviz")),
     )
 
-    # ── 5. Foxglove Bridge（可选 WebSocket 可视化） ────────
-    foxglove_node = Node(
-        package="foxglove_bridge",
-        executable="foxglove_bridge",
-        name="foxglove_bridge",
-        parameters=[{"port": 8765, "max_qos_depth": 10}],
+    # ── 5. 只读远程感知监控 + Foxglove Bridge ──────────────
+    remote_monitor_launch = IncludeLaunchDescription(
+        PathJoinSubstitution(
+            [remote_monitor_share, "launch", "remote_monitor.launch.py"]
+        ),
+        launch_arguments={
+            "use_sim_time": use_sim,
+            "enable_visualizer": "true",
+            "enable_foxglove": "true",
+            "foxglove_address": LaunchConfiguration("foxglove_address"),
+            "foxglove_port": LaunchConfiguration("foxglove_port"),
+            "image_topic": LaunchConfiguration("sony_image_topic"),
+            "model_path": model_path,
+            "inference_backend": detection_device,
+            "yolo_model": LaunchConfiguration("yolo_model_name"),
+            "enable_future_inputs": LaunchConfiguration(
+                "enable_monitor_future_inputs"
+            ),
+        }.items(),
         condition=IfCondition(LaunchConfiguration("use_foxglove")),
     )
 
@@ -144,7 +158,17 @@ def generate_launch_description():
         DeclareLaunchArgument("use_rviz", default_value="false",
                               description="是否启动 RViz2"),
         DeclareLaunchArgument("use_foxglove", default_value="false",
-                              description="是否启动 Foxglove WebSocket 桥接"),
+                              description="是否启动远程感知监控与 Foxglove WebSocket 桥接"),
+        DeclareLaunchArgument("foxglove_address", default_value="0.0.0.0",
+                              description="Foxglove Bridge 监听地址"),
+        DeclareLaunchArgument("foxglove_port", default_value="8765",
+                              description="Foxglove Bridge WebSocket 端口"),
+        DeclareLaunchArgument("yolo_model_name", default_value="yolov8n",
+                              description="远程状态面板显示的模型名称"),
+        DeclareLaunchArgument(
+            "enable_monitor_future_inputs", default_value="false",
+            description="预留观察 target_3d/cmd_vel/gimbal_state，不发布控制指令",
+        ),
         DeclareLaunchArgument("use_mock_detector", default_value="false",
                               description="是否使用合成检测器（绕过 YOLO）"),
         DeclareLaunchArgument("enable_sony_camera", default_value="true",
@@ -174,5 +198,5 @@ def generate_launch_description():
         TimerAction(period=3.0, actions=[servo_launch]),
 
         # 可视化 (t=4s)
-        TimerAction(period=4.0, actions=[rviz_node, foxglove_node]),
+        TimerAction(period=4.0, actions=[rviz_node, remote_monitor_launch]),
     ])
