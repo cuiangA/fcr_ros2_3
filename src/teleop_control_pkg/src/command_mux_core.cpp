@@ -130,7 +130,15 @@ MuxDecision CommandMuxCore::step(int64_t now_ms, double dt_sec)
     if (desired == CommandSource::kStop) {
       dwell_until_ms_ = now_ms;
     } else if (now_ms >= dwell_until_ms_) {
-      dwell_until_ms_ = now_ms + config_.zero_dwell_ms;
+      // Starting or resuming the same source is already coming from zero and
+      // is protected by the slew limiter. Only a real manual<->auto handover
+      // needs the full zero dwell. This avoids adding 200 ms to every keyboard
+      // lease renewal.
+      const bool changing_live_source =
+        last_non_stop_source_ != CommandSource::kStop &&
+        last_non_stop_source_ != desired;
+      dwell_until_ms_ = now_ms +
+        (changing_live_source ? config_.zero_dwell_ms : 0);
     }
   }
   if (now_ms < dwell_until_ms_) {
@@ -143,6 +151,7 @@ MuxDecision CommandMuxCore::step(int64_t now_ms, double dt_sec)
     decision.reason = reason;
     return decision;
   }
+  last_non_stop_source_ = active_source_;
 
   const double dt = std::max(0.0, std::min(dt_sec, 0.25));
   output_.x = approach(output_.x, target.x, config_.max_accel_x * dt);

@@ -22,6 +22,34 @@ TEST(CommandMuxCore, ManualRequiresHeartbeatDeadmanAndFreshCommand)
   EXPECT_EQ(core.step(220, 0.05).source, CommandSource::kStop);
 }
 
+TEST(CommandMuxCore, InitialManualCommandDoesNotWaitForSourceDwell)
+{
+  CommandMuxConfig config;
+  config.zero_dwell_ms = 200;
+  CommandMuxCore core(config);
+  core.receive_heartbeat(0);
+  core.receive_deadman(true, 0);
+  core.receive_manual_command({0.03, 0.0, 0.0}, 0);
+  EXPECT_EQ(core.step(0, 0.05).source, CommandSource::kManual);
+}
+
+TEST(CommandMuxCore, SameManualSourceResumesWithoutDwellAfterLeaseGap)
+{
+  CommandMuxConfig config;
+  config.zero_dwell_ms = 200;
+  CommandMuxCore core(config);
+  core.receive_heartbeat(0);
+  core.receive_deadman(true, 0);
+  core.receive_manual_command({0.03, 0.0, 0.0}, 0);
+  EXPECT_EQ(core.step(0, 0.05).source, CommandSource::kManual);
+  core.receive_deadman(false, 10);
+  EXPECT_EQ(core.step(10, 0.05).source, CommandSource::kStop);
+  core.receive_heartbeat(20);
+  core.receive_deadman(true, 20);
+  core.receive_manual_command({0.03, 0.0, 0.0}, 20);
+  EXPECT_EQ(core.step(20, 0.05).source, CommandSource::kManual);
+}
+
 TEST(CommandMuxCore, EstopLatchesAndNeedsSafeClear)
 {
   CommandMuxConfig config;

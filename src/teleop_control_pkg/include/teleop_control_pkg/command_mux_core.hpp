@@ -70,6 +70,7 @@ private:
   ControlMode mode_{ControlMode::kManual};
   CommandSource active_source_{CommandSource::kStop};
   CommandSource pending_source_{CommandSource::kStop};
+  CommandSource last_non_stop_source_{CommandSource::kStop};
   int64_t dwell_until_ms_{0};
   int64_t heartbeat_time_ms_{-1};
   int64_t deadman_time_ms_{-1};
