@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import select
 import sys
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -44,27 +45,40 @@ class PosixKeyboardReader:
 
         self._termios = termios
         self._old_settings = termios.tcgetattr(sys.stdin)
+        self._buffer = ""
+        self._escape_started_at: Optional[float] = None
         tty.setcbreak(sys.stdin.fileno())
 
     def read_key(self) -> Optional[str]:
-        readable, _, _ = select.select([sys.stdin], [], [], 0.0)
-        if not readable:
+        # SSH/terminal may split an arrow escape sequence across timer ticks.
+        # Accumulate available bytes without blocking the ROS executor.
+        while select.select([sys.stdin], [], [], 0.0)[0]:
+            self._buffer += sys.stdin.read(1)
+
+        if not self._buffer:
             return None
-        first = sys.stdin.read(1)
-        if first != "\x1b":
-            return first
-        sequence = first
-        for _ in range(2):
-            readable, _, _ = select.select([sys.stdin], [], [], 0.01)
-            if not readable:
-                break
-            sequence += sys.stdin.read(1)
+        if not self._buffer.startswith("\x1b"):
+            key, self._buffer = self._buffer[0], self._buffer[1:]
+            return key
+
+        if self._escape_started_at is None:
+            self._escape_started_at = time.monotonic()
+        if len(self._buffer) < 3:
+            # A standalone/incomplete ESC is deliberately ignored instead of
+            # becoming an ESTOP. X is the unambiguous software ESTOP key.
+            if time.monotonic() - self._escape_started_at > 0.15:
+                self._buffer = self._buffer[1:]
+                self._escape_started_at = None
+            return None
+
+        sequence, self._buffer = self._buffer[:3], self._buffer[3:]
+        self._escape_started_at = None
         return {
             "\x1b[A": "UP",
             "\x1b[B": "DOWN",
             "\x1b[C": "RIGHT",
             "\x1b[D": "LEFT",
-        }.get(sequence, "ESC")
+        }.get(sequence)
 
     def close(self) -> None:
         self._termios.tcsetattr(
@@ -177,7 +191,7 @@ class KeyboardPlatformTeleop(Node):
         elif key == " ":
             self._stop(repeat=2)
             return
-        elif key in ("x", "ESC"):
+        elif key == "x":
             self._stop(repeat=2)
             self.estop_pub.publish(Bool(data=True))
             self.get_logger().error("software emergency stop requested")
@@ -252,7 +266,7 @@ class KeyboardPlatformTeleop(Node):
     def _print_help(self) -> None:
         self.get_logger().info(
             "W/S forward/back, A/D strafe, Q/E rotate, arrows gimbal; "
-            "repeat motion key to keep enabled; Space stop, X/Esc ESTOP, "
+            "repeat motion key to keep enabled; Space stop, X ESTOP, "
             "C clear ESTOP, M manual, O auto, P safe stop, +/- speed, Ctrl-C quit"
         )
 

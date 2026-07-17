@@ -44,7 +44,10 @@ def generate_launch_description():
     # ── 1. 机器人平台（硬件驱动层） ─────────────────────────
     platform_launch = IncludeLaunchDescription(
         PathJoinSubstitution([platform_share, "launch", "platform.launch.py"]),
-        launch_arguments={"use_sim": use_sim}.items(),
+        launch_arguments={
+            "use_sim": use_sim,
+            "enable_imu": LaunchConfiguration("enable_imu"),
+        }.items(),
     )
 
     # ── 1b. Sony RGB相机（实机模式）─────────────────────────
@@ -154,6 +157,9 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("use_sim", default_value="false",
                               description="是否启用仿真模式"),
+        DeclareLaunchArgument(
+            "enable_imu", default_value="false",
+            description="真实BNO055后端完成前保持false；仿真可显式设为true"),
         DeclareLaunchArgument("controller_plugin",
                               default_value="servo_control_pkg::IBVSController",
                               description="视觉伺服控制器插件类名"),

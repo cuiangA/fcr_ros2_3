@@ -11,7 +11,10 @@ def generate_launch_description():
         PathJoinSubstitution(
             [FindPackageShare("robot_platform_pkg"), "launch", "platform.launch.py"]
         ),
-        launch_arguments={"use_sim": LaunchConfiguration("use_sim")}.items(),
+        launch_arguments={
+            "use_sim": LaunchConfiguration("use_sim"),
+            "enable_imu": LaunchConfiguration("enable_imu"),
+        }.items(),
     )
     remote_control = IncludeLaunchDescription(
         PathJoinSubstitution(
@@ -22,6 +25,11 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "use_sim", default_value="false", description="Use simulated platform hardware."
+        ),
+        DeclareLaunchArgument(
+            "enable_imu",
+            default_value="false",
+            description="Start IMU driver; keep false until the real BNO055 backend exists.",
         ),
         platform,
         remote_control,

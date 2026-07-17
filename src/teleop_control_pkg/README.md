@@ -38,13 +38,15 @@ ros2 run teleop_control_pkg keyboard_platform_teleop
 
 After chassis-only acceptance, start all platform drivers with
 `ros2 launch teleop_control_pkg remote_platform.launch.py use_sim:=false`.
+The remote launch keeps the unfinished real BNO055 driver disabled by default;
+pass `enable_imu:=true` only in simulation or after implementing that backend.
 
 Terminal input cannot report physical key release. Repeat a motion key to renew
 the 250 ms deadman lease. Stopping key input therefore stops the robot. Controls:
 
 - `W/S`: forward/back; `A/D`: strafe; `Q/E`: rotate
 - Arrow keys: gimbal pitch/yaw
-- Space: stop; `X` or Escape: latch software ESTOP; `C`: clear ESTOP
+- Space: stop; `X`: latch software ESTOP; `C`: clear ESTOP
 - `M`: manual; `O`: auto; `P`: safe stop; `+/-`: speed scale
 
 ## Acceptance checks
