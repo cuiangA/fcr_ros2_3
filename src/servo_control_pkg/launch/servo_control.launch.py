@@ -29,6 +29,9 @@ def generate_launch_description():
     allocation_ratio = LaunchConfiguration("allocation_ratio")
     control_rate = LaunchConfiguration("control_rate")
     auto_start = LaunchConfiguration("auto_start")
+    cmd_vel_output = LaunchConfiguration("cmd_vel_output")
+    cmd_gimbal_output = LaunchConfiguration("cmd_gimbal_output")
+    enable_velocity_commander = LaunchConfiguration("enable_velocity_commander")
 
     config_dir = PathJoinSubstitution([
         FindPackageShare("servo_control_pkg"), "config"
@@ -55,8 +58,8 @@ def generate_launch_description():
             ("/perception/targets_3d", "/perception/targets_3d"),  # 输入：3D 目标位姿
             ("/platform/state", "/platform/state"),                # 输入：平台状态
             ("/camera/camera_info", "/camera/camera_info"),        # 输入：相机内参
-            ("/cmd_vel", "/cmd_vel"),                              # 输出：底盘速度指令
-            ("/cmd_gimbal", "/cmd_gimbal"),                        # 输出：云台指令
+            ("/cmd_vel", cmd_vel_output),                          # 输出：底盘速度指令
+            ("/cmd_gimbal", cmd_gimbal_output),                    # 输出：云台指令
             ("/servo/state", "/servo/state"),                      # 输出：伺服状态
         ],
     )
@@ -72,6 +75,11 @@ def generate_launch_description():
             "max_angular_velocity": 2.0,       # 最大角速度 (rad/s)
             "gimbal_rate_limit": 3.14159,      # 云台速度限制 (rad/s)
         }],
+        remappings=[
+            ("/cmd_vel", cmd_vel_output),
+            ("/cmd_gimbal", cmd_gimbal_output),
+        ],
+        condition=IfCondition(enable_velocity_commander),
     )
 
     return LaunchDescription([
@@ -87,6 +95,15 @@ def generate_launch_description():
         DeclareLaunchArgument("auto_start",
                               default_value="false",
                               description="是否在收到目标后自动启动闭环"),
+        DeclareLaunchArgument(
+            "cmd_vel_output", default_value="/cmd_vel",
+            description="底盘输出话题；使用安全仲裁时设为/auto/cmd_vel"),
+        DeclareLaunchArgument(
+            "cmd_gimbal_output", default_value="/cmd_gimbal",
+            description="云台输出话题；使用安全仲裁时设为/auto/cmd_gimbal"),
+        DeclareLaunchArgument(
+            "enable_velocity_commander", default_value="false",
+            description="启用备用相机速度转发器；默认关闭以避免重复控制源"),
         servo_manager,
         velocity_commander,
     ])

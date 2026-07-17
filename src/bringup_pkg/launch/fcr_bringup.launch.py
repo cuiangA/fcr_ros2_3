@@ -39,6 +39,7 @@ def generate_launch_description():
     platform_share = FindPackageShare("robot_platform_pkg")
     sony_share = FindPackageShare("sony_camera_pkg")
     remote_monitor_share = FindPackageShare("remote_monitor_pkg")
+    teleop_share = FindPackageShare("teleop_control_pkg")
 
     # ── 1. 机器人平台（硬件驱动层） ─────────────────────────
     platform_launch = IncludeLaunchDescription(
@@ -61,6 +62,12 @@ def generate_launch_description():
                 use_sim, "' != 'true'",
             ])
         ),
+    )
+
+    # 安全仲裁是执行器最终控制话题的唯一发布者。
+    remote_control_launch = IncludeLaunchDescription(
+        PathJoinSubstitution([teleop_share, "launch", "remote_control.launch.py"]),
+        launch_arguments={"start_keyboard": "false"}.items(),
     )
 
     # Mock和真实检测互斥；跟踪节点在两种模式下都可以运行。
@@ -99,6 +106,8 @@ def generate_launch_description():
         PathJoinSubstitution([servo_share, "launch", "servo_control.launch.py"]),
         launch_arguments={
             "controller_plugin": controller_plugin,
+            "cmd_vel_output": "/auto/cmd_vel",
+            "cmd_gimbal_output": "/auto/cmd_gimbal",
         }.items(),
         condition=IfCondition(LaunchConfiguration("enable_servo")),
     )
@@ -223,6 +232,7 @@ def generate_launch_description():
 
         # 阶段 1：平台驱动 (t=0s)
         platform_launch,
+        remote_control_launch,
         sony_launch,
         mock_detector,
 

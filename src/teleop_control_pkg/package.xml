@@ -9,12 +9,16 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>vision_servo_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
+  <depend>geometry_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>vision_servo_msgs</depend>
+  <depend>std_msgs</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>robot_platform_pkg</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

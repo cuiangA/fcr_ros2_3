@@ -3,15 +3,15 @@
 chassis_driver:
   ros__parameters:
     use_sim: false                   # true = 仿真模式，无需串口硬件
-    serial_device: "/dev/serial/by-id/REPLACE_WITH_FEETECH_ADAPTER_ID"
+    serial_device: "/dev/serial/by-id/usb-1a86_USB_Single_Serial_5A7A058979-if00"
     baudrate: 1000000                # LeRobot/STS3215 默认波特率
-    max_linear_velocity: 0.1         # 首次实车联调使用低速限制 (m/s)
-    max_angular_velocity: 0.5        # 首次实车联调使用低速限制 (rad/s)
+    max_linear_velocity: 0.05        # 已完成实车低速验收 (m/s)
+    max_angular_velocity: 0.25       # 已完成实车低速验收 (rad/s)
     wheel_radius: 0.05               # 全向轮半径 (m)，用于运动学解算
     base_radius: 0.125               # LeRobot 默认值，实车测量后修正 (m)
     left_wheel_id: 7
     back_wheel_id: 8
     right_wheel_id: 9
-    max_raw_wheel_velocity: 3000     # LeRobot 安全缩放上限
+    max_raw_wheel_velocity: 500      # 已完成实车低速验收的安全上限
     command_timeout_ms: 250          # 丢失 /cmd_vel 后自动停车
     enable_emergency_stop: true      # 启用急停检测（丢失控制信号时自动停车）
