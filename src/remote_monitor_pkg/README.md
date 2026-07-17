@@ -20,8 +20,8 @@ Image panel 选择 `/perception/tracking_image/compressed`。节点直接发布 
 `sensor_msgs/CompressedImage`，不再发布远程原始图，也不经过
 `compressed_image_transport` 的二次队列。
 
-轨迹回调只覆盖一个容量为 1 的“最新帧邮箱”，5 Hz 定时器只取当时最新帧；旧帧
-不会排队等待绘制。默认输出宽度 640、JPEG 质量 55，源时间戳年龄超过 300 ms 的帧
+轨迹回调只覆盖一个容量为 1 的“最新帧邮箱”，10 Hz 定时器只取当时最新帧；旧帧
+不会排队等待绘制。默认输出宽度 960、JPEG 质量 65，源时间戳年龄超过 300 ms 的帧
 在编码前后都会直接丢弃，发布端 QoS 采用 best-effort、keep-last(1)、300 ms
 lifespan。该限制只作用于观察图；Sony、YOLO、Tracker 仍按各自完整帧率运行。
 

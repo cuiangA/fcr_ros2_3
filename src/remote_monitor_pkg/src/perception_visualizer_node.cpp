@@ -320,16 +320,16 @@ private:
         "status_publish_rate_hz", 5.0,
         floating_descriptor("Structured monitor status publication rate.", 0.2, 30.0));
     remote_publish_rate_hz_ = declare_parameter<double>(
-        "remote_publish_rate_hz", 5.0,
+        "remote_publish_rate_hz", 10.0,
         floating_descriptor(
             "Maximum annotated image rate; detection and tracking remain unthrottled.",
             0.5, 30.0));
     remote_max_width_ = declare_parameter<int>(
-        "remote_max_width", 640,
+        "remote_max_width", 960,
         integer_descriptor(
              "Maximum annotated image width; 0 preserves the source resolution.", 0, 7680));
     jpeg_quality_ = declare_parameter<int>(
-        "jpeg_quality", 55,
+        "jpeg_quality", 65,
         integer_descriptor("JPEG quality for the direct remote image stream.", 20, 95));
     max_frame_age_ms_ = declare_parameter<int>(
         "max_frame_age_ms", 300,
@@ -827,11 +827,11 @@ private:
 
   size_t cache_size_ = 12;
   double status_publish_rate_hz_ = 5.0;
-  double remote_publish_rate_hz_ = 5.0;
+  double remote_publish_rate_hz_ = 10.0;
   double diagnostic_timeout_sec_ = 3.0;
   double optional_input_timeout_sec_ = 2.0;
-  int remote_max_width_ = 640;
-  int jpeg_quality_ = 55;
+  int remote_max_width_ = 960;
+  int jpeg_quality_ = 65;
   int max_frame_age_ms_ = 300;
   bool draw_detections_ = true;
   bool draw_tracks_ = true;
