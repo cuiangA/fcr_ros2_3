@@ -119,7 +119,7 @@ install(TARGETS servo_manager_node DESTINATION lib/${PROJECT_NAME})
 add_executable(mvp_follow_controller_node src/mvp_follow_controller_node.cpp)
 target_include_directories(mvp_follow_controller_node PRIVATE include)
 ament_target_dependencies(mvp_follow_controller_node
-  rclcpp rcl_interfaces vision_servo_msgs geometry_msgs Eigen3
+  rclcpp rcl_interfaces vision_servo_msgs geometry_msgs sensor_msgs Eigen3
 )
 target_link_libraries(mvp_follow_controller_node servo_qos)
 install(TARGETS mvp_follow_controller_node DESTINATION lib/${PROJECT_NAME})
@@ -146,6 +146,11 @@ if(BUILD_TESTING)
   if(TARGET test_target_input)
     target_include_directories(test_target_input PRIVATE include)
     ament_target_dependencies(test_target_input vision_servo_msgs)
+  endif()
+  ament_add_gtest(test_mvp_safety test/test_mvp_safety.cpp)
+  if(TARGET test_mvp_safety)
+    target_include_directories(test_mvp_safety PRIVATE include)
+    ament_target_dependencies(test_mvp_safety vision_servo_msgs)
   endif()
 endif()
 

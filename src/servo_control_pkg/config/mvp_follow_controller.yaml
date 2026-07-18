@@ -2,9 +2,15 @@ mvp_follow_controller_node:
   ros__parameters:
     target_topic: /target/current
     platform_state_topic: /platform/state
+    camera_info_topic: /sony/camera_info
     cmd_vel_topic: /cmd_vel
     cmd_gimbal_topic: /cmd_gimbal
     use_twist_stamped: true
+    enable_gimbal_tracking: true
+    enable_base_yaw: true
+    enable_base_translation: true
+    require_camera_info: false
+    center_reference: image_center
 
     image_width: 640
     image_height: 480
@@ -16,6 +22,8 @@ mvp_follow_controller_node:
     K_gimbal_y: 0.8
     K_base_z: 0.4
     K_base_yaw: 0.5
+    yaw_sign: -1.0
+    pitch_sign: -1.0
     use_ibvs_gimbal: true
     ibvs_gimbal_gain: 1.0
     ibvs_damping: 0.01
@@ -28,6 +36,9 @@ mvp_follow_controller_node:
     ey_deadband: 0.05
     depth_deadband: 0.2
     q_yaw_deadband: 0.0873
+    min_depth_confidence: 0.0
+    min_valid_depth: 0.1
+    max_valid_depth: 20.0
 
     max_gimbal_yaw_vel: 1.0
     max_gimbal_pitch_vel: 0.8

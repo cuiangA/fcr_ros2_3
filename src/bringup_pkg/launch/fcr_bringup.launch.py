@@ -47,6 +47,7 @@ def generate_launch_description():
         launch_arguments={
             "use_sim": use_sim,
             "enable_imu": LaunchConfiguration("enable_imu"),
+            "enable_chassis": LaunchConfiguration("enable_chassis"),
             "can_interface": LaunchConfiguration("can_interface"),
         }.items(),
     )
@@ -168,6 +169,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "enable_imu", default_value="false",
             description="真实BNO055后端完成前保持false；仿真可显式设为true"),
+        DeclareLaunchArgument(
+            "enable_chassis", default_value="true",
+            description="是否启动底盘驱动和里程计；纯云台测试应设为false"),
         DeclareLaunchArgument(
             "can_interface", default_value="can0",
             description="DJI RS2云台使用的Linux SocketCAN接口；USB-CAN实机可设为can1"),

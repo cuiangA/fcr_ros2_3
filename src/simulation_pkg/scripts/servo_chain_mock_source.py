@@ -8,7 +8,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import Bool
-from vision_servo_msgs.msg import Target, TargetArray
+from vision_servo_msgs.msg import PlatformState, Target, TargetArray
 
 
 class ServoChainMockSource(Node):
@@ -20,6 +20,7 @@ class ServoChainMockSource(Node):
         self.declare_parameter("camera_info_topic", "/sony/camera_info")
         self.declare_parameter("target_topic", "/perception/targets_3d")
         self.declare_parameter("target_mode", "3d")
+        self.declare_parameter("platform_yaw", 0.0)
 
         rate = float(self.get_parameter("publish_rate_hz").value)
         if rate <= 0.0:
@@ -37,15 +38,24 @@ class ServoChainMockSource(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
+        platform_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self.camera_pub = self.create_publisher(
             CameraInfo, str(self.get_parameter("camera_info_topic").value), sensor_qos)
         self.target_pub = self.create_publisher(
             TargetArray, str(self.get_parameter("target_topic").value), control_qos)
         self.active_pub = self.create_publisher(Bool, "/mock/target_active", control_qos)
+        self.platform_pub = self.create_publisher(
+            PlatformState, "/platform/state", platform_qos)
 
         self.start_delay = float(self.get_parameter("start_delay_sec").value)
         self.active_duration = float(self.get_parameter("active_duration_sec").value)
         self.target_mode = str(self.get_parameter("target_mode").value).lower()
+        self.platform_yaw = float(self.get_parameter("platform_yaw").value)
         if self.target_mode not in ("2d", "3d"):
             raise ValueError("target_mode must be '2d' or '3d'")
         self.started_at = time.monotonic()
@@ -71,6 +81,14 @@ class ServoChainMockSource(Node):
                     0.0, 400.0, 240.0, 0.0,
                     0.0, 0.0, 1.0, 0.0]
         self.camera_pub.publish(camera)
+
+        platform = PlatformState()
+        platform.header.stamp = now
+        platform.header.frame_id = "base_link"
+        platform.gimbal_yaw = self.platform_yaw
+        platform.chassis_connected = True
+        platform.gimbal_connected = True
+        self.platform_pub.publish(platform)
 
         elapsed = time.monotonic() - self.started_at
         active = self.start_delay <= elapsed < self.start_delay + self.active_duration

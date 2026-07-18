@@ -323,6 +323,8 @@ class CoopSim(Node):
             t.header = target_array.header
             t.id = 0
             t.class_name = "person"
+            t.tracking_state = Target.TRACKING_STATE_CONFIRMED
+            t.visible = True
             t.confidence = 0.95
             t.depth_confidence = 1.0
             t.position = [float(optical_x), 0.0, float(optical_z)]
