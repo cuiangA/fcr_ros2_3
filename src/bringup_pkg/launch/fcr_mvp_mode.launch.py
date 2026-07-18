@@ -39,7 +39,11 @@ def generate_launch_description():
         PathJoinSubstitution([
             servo_share, "launch", "mvp_follow_core.launch.py"
         ]),
-        launch_arguments={"mvp_config": LaunchConfiguration("mvp_config")}.items(),
+        launch_arguments={
+            "mvp_config": LaunchConfiguration("mvp_config"),
+            "yaw_sign": LaunchConfiguration("yaw_sign"),
+            "pitch_sign": LaunchConfiguration("pitch_sign"),
+        }.items(),
     )
 
     return LaunchDescription([
@@ -76,6 +80,16 @@ def generate_launch_description():
             default_value=PathJoinSubstitution([
                 servo_share, "config", "mvp_gimbal_only.yaml"
             ]),
+        ),
+        DeclareLaunchArgument(
+            "yaw_sign",
+            default_value="1.0",
+            description="RS2 yaw direction multiplier (real can1 hardware: +1).",
+        ),
+        DeclareLaunchArgument(
+            "pitch_sign",
+            default_value="-1.0",
+            description="RS2 pitch direction multiplier; verify with a vertical test.",
         ),
         system,
         TimerAction(period=4.0, actions=[mvp]),

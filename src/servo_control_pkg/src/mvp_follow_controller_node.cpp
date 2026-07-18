@@ -272,11 +272,12 @@ public:
     RCLCPP_INFO(
       get_logger(),
       "MVP follow controller started: target=%s, camera_info=%s, platform=%s, "
-      "cmd_vel=%s (%s), cmd_gimbal=%s, gates[gimbal=%d,yaw=%d,translation=%d]",
+      "cmd_vel=%s (%s), cmd_gimbal=%s, gates[gimbal=%d,yaw=%d,translation=%d], "
+      "signs[yaw=%.1f,pitch=%.1f]",
       target_topic_.c_str(), camera_info_topic_.c_str(), platform_state_topic_.c_str(),
       cmd_vel_topic_.c_str(), use_twist_stamped_ ? "TwistStamped" : "Twist",
       cmd_gimbal_topic_.c_str(), enable_gimbal_tracking_, enable_base_yaw_,
-      enable_base_translation_);
+      enable_base_translation_, yaw_sign_, pitch_sign_);
   }
 
   /**
@@ -891,7 +892,7 @@ private:
     //
     // 两种模式可选：
     //   use_ibvs_gimbal_=true:  单点特征 IBVS 角速度求解（考虑透视投影几何）
-    //   use_ibvs_gimbal_=false: 纯 P 控制 gimbal_yaw=-K×ex, gimbal_pitch=-K×ey
+    //   use_ibvs_gimbal_=false: 纯 P 控制，软件符号由 yaw_sign/pitch_sign 标定
     const auto gimbal_command = enable_gimbal_tracking_
       ? (use_ibvs_gimbal_
           ? compute_ibvs_gimbal_velocity(center.first, center.second)
@@ -935,8 +936,10 @@ private:
   /**
    * @brief 纯 P 控制云台 — 线性映射图像误差到角速度。
    *
-   *   gimbal_yaw_vel   = -K_gimbal_x × ex   (ex > 0 目标在右侧 → 云台向右转)
-   *   gimbal_pitch_vel = -K_gimbal_y × ey   (ey > 0 目标在下侧 → 云台向下转)
+   *   gimbal_yaw_vel   = yaw_sign   × K_gimbal_x × ex
+   *   gimbal_pitch_vel = pitch_sign × K_gimbal_y × ey
+   *
+   * yaw_sign/pitch_sign 是真机方向标定参数，必须使执行后的像素误差绝对值减小。
    *
    * 这是最简单的控制方式，在目标接近图像中心时工作良好。
    * 当目标偏离中心较远时，透视投影的非线性会使响应不够精确。

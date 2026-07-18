@@ -21,7 +21,8 @@ mvp_follow_controller_node:
     use_ibvs_gimbal: false
     K_gimbal_x: 0.25
     K_gimbal_y: 0.18
-    yaw_sign: -1.0
+    # Real RS2/can1 calibration: a target on the image right must command +yaw.
+    yaw_sign: 1.0
     pitch_sign: -1.0
     ex_deadband: 0.05
     ey_deadband: 0.06
