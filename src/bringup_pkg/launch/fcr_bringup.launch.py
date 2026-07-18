@@ -109,6 +109,9 @@ def generate_launch_description():
         PathJoinSubstitution([servo_share, "launch", "servo_control.launch.py"]),
         launch_arguments={
             "controller_plugin": controller_plugin,
+            "auto_start": LaunchConfiguration("servo_auto_start"),
+            "target_timeout": LaunchConfiguration("servo_target_timeout"),
+            "camera_info_input": LaunchConfiguration("servo_camera_info_topic"),
             "cmd_vel_output": "/auto/cmd_vel",
             "cmd_gimbal_output": "/auto/cmd_gimbal",
         }.items(),
@@ -234,6 +237,18 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "enable_servo", default_value="false",
             description="融合前保持false；仅在有效3D目标源可用时启动控制闭环",
+        ),
+        DeclareLaunchArgument(
+            "servo_auto_start", default_value="false",
+            description="收到有效3D目标后是否自动进入伺服闭环；生产环境默认关闭",
+        ),
+        DeclareLaunchArgument(
+            "servo_target_timeout", default_value="0.25",
+            description="3D目标停止更新后伺服发布零速度的超时（秒）",
+        ),
+        DeclareLaunchArgument(
+            "servo_camera_info_topic", default_value="/sony/camera_info",
+            description="伺服控制使用的CameraInfo话题",
         ),
 
         # 阶段 1：平台驱动 (t=0s)

@@ -212,11 +212,11 @@ public:
       std::bind(&ServoManagerNode::platform_callback, this, std::placeholders::_1));
 
     // 相机内参标定信息。
-    // TRANSIENT_LOCAL QoS：发布者只需发布一次，所有迟加入的订阅者均可获取
-    // 最新的标定消息，无需等待发布者周期性重发。这对离线标定或启动顺序不
-    // 固定的多节点系统至关重要。
+    // 使用 SensorDataQoS（BEST_EFFORT + VOLATILE）兼容 Sony 等相机驱动的
+    // 常见发布策略，避免 RELIABLE 订阅端无法匹配 BEST_EFFORT 发布端。
+    // 相机驱动应周期性发布 CameraInfo，使迟启动的伺服节点也能完成标定。
     camera_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-      "/camera/camera_info", rclcpp::QoS(1).reliable().transient_local(),
+      "/camera/camera_info", rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&ServoManagerNode::camera_info_callback, this, std::placeholders::_1));
 
     // ═══════════════════════════════════════════════════════════════════════

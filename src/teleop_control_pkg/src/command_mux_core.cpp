@@ -153,6 +153,16 @@ MuxDecision CommandMuxCore::step(int64_t now_ms, double dt_sec)
   }
   last_non_stop_source_ = active_source_;
 
+  // 上游明确发布零速代表停车请求。安全停车不能被正常运动使用的加速度
+  // 斜坡拖延；非零指令仍通过下方的 slew limiter 平滑启动和变速。
+  if (is_zero(target)) {
+    output_ = {};
+    decision.velocity = output_;
+    decision.source = active_source_;
+    decision.reason = reason;
+    return decision;
+  }
+
   const double dt = std::max(0.0, std::min(dt_sec, 0.25));
   output_.x = approach(output_.x, target.x, config_.max_accel_x * dt);
   output_.y = approach(output_.y, target.y, config_.max_accel_y * dt);

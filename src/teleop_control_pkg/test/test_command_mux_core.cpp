@@ -106,3 +106,20 @@ TEST(CommandMuxCore, LimitsVelocityAndAcceleration)
   EXPECT_NEAR(decision.velocity.y, -0.015, 1e-9);
   EXPECT_NEAR(decision.velocity.yaw, 0.05, 1e-9);
 }
+
+TEST(CommandMuxCore, ExplicitZeroCommandStopsImmediately)
+{
+  CommandMuxConfig config;
+  config.zero_dwell_ms = 0;
+  CommandMuxCore core(config);
+  core.set_mode(ControlMode::kAuto, 0);
+  core.receive_auto_command({0.05, 0.0, 0.0}, 0);
+  EXPECT_GT(core.step(0, 0.1).velocity.x, 0.0);
+
+  core.receive_auto_command({}, 1);
+  const auto stopped = core.step(1, 0.001);
+  EXPECT_EQ(stopped.source, CommandSource::kAuto);
+  EXPECT_DOUBLE_EQ(stopped.velocity.x, 0.0);
+  EXPECT_DOUBLE_EQ(stopped.velocity.y, 0.0);
+  EXPECT_DOUBLE_EQ(stopped.velocity.yaw, 0.0);
+}
