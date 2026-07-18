@@ -47,6 +47,7 @@ def generate_launch_description():
         launch_arguments={
             "use_sim": use_sim,
             "enable_imu": LaunchConfiguration("enable_imu"),
+            "can_interface": LaunchConfiguration("can_interface"),
         }.items(),
     )
 
@@ -167,6 +168,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "enable_imu", default_value="false",
             description="真实BNO055后端完成前保持false；仿真可显式设为true"),
+        DeclareLaunchArgument(
+            "can_interface", default_value="can0",
+            description="DJI RS2云台使用的Linux SocketCAN接口；USB-CAN实机可设为can1"),
         DeclareLaunchArgument("controller_plugin",
                               default_value="servo_control_pkg::IBVSController",
                               description="视觉伺服控制器插件类名"),

@@ -29,6 +29,7 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     use_sim = LaunchConfiguration("use_sim")
     enable_imu = LaunchConfiguration("enable_imu")
+    can_interface = LaunchConfiguration("can_interface")
 
     # 配置文件目录
     config_dir = PathJoinSubstitution([
@@ -52,7 +53,10 @@ def generate_launch_description():
         name="gimbal_driver",
         output="screen",
         parameters=[PathJoinSubstitution([config_dir, "gimbal_params.yaml"]),
-                    {"use_sim": use_sim}],
+                    {
+                        "use_sim": use_sim,
+                        "can_interface": can_interface,
+                    }],
     )
 
     # ── IMU 驱动节点 ──────────────────────────────────────────────
@@ -89,5 +93,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "enable_imu", default_value="true",
             description="是否启动IMU驱动；真实BNO055后端完成前应设为false"),
+        DeclareLaunchArgument(
+            "can_interface", default_value="can0",
+            description="DJI RS2云台使用的Linux SocketCAN接口"),
         chassis_node, gimbal_node, imu_node, odom_node, platform_mgr,
     ])
