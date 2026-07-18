@@ -22,6 +22,9 @@ mvp_follow_controller_node:
     K_gimbal_x: 0.25
     K_gimbal_y: 0.18
     K_base_yaw: 0.20
+    base_yaw_sign: -1.0
+    capture_gimbal_yaw_center_on_startup: true
+    gimbal_yaw_center: 0.0
     K_base_z: 0.15
     desired_distance: 2.0
     # Real RS2/can1 calibration: a target on the image right must command +yaw.

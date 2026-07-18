@@ -49,7 +49,7 @@
  *   │    base_vx = K_base_z × ez       深度误差 → 前向速度               │
  *   │              ez = depth - desired_distance                         │
  *   │                                                                    │
- *   │    base_wz = K_base_yaw × q_yaw  云台偏航角 → 底盘角速度           │
+ *   │    base_wz = sign × K_base_yaw × wrap(q_yaw-q_center)             │
  *   │              if |q_yaw| > deadband else 0                          │
  *   │                                                                    │
  *   │    底盘惯性大、响应慢（~2Hz），缓慢消除云台偏角，                     │
@@ -107,6 +107,7 @@
 
 #include "servo_control_pkg/qos.hpp"
 #include "servo_control_pkg/mvp_safety.hpp"
+#include "servo_control_pkg/mvp_yaw_control.hpp"
 
 #include <Eigen/Dense>
 #include <geometry_msgs/msg/twist.hpp>
@@ -273,11 +274,12 @@ public:
       get_logger(),
       "MVP follow controller started: target=%s, camera_info=%s, platform=%s, "
       "cmd_vel=%s (%s), cmd_gimbal=%s, gates[gimbal=%d,yaw=%d,translation=%d], "
-      "signs[yaw=%.1f,pitch=%.1f]",
+      "signs[yaw=%.1f,pitch=%.1f,base_yaw=%.1f], yaw_center=%s",
       target_topic_.c_str(), camera_info_topic_.c_str(), platform_state_topic_.c_str(),
       cmd_vel_topic_.c_str(), use_twist_stamped_ ? "TwistStamped" : "Twist",
       cmd_gimbal_topic_.c_str(), enable_gimbal_tracking_, enable_base_yaw_,
-      enable_base_translation_, yaw_sign_, pitch_sign_);
+      enable_base_translation_, yaw_sign_, pitch_sign_, base_yaw_sign_,
+      capture_gimbal_yaw_center_on_startup_ ? "startup" : "fixed");
   }
 
   /**
@@ -422,6 +424,9 @@ private:
     k_base_yaw_ = declare_described_parameter<double>(
       "K_base_yaw", 0.5,
       "Base yaw proportional gain on gimbal yaw angle.");
+    base_yaw_sign_ = declare_described_parameter<double>(
+      "base_yaw_sign", -1.0,
+      "Direction multiplier from relative gimbal yaw to ROS base angular.z.");
     yaw_sign_ = declare_described_parameter<double>(
       "yaw_sign", -1.0,
       "Hardware direction multiplier applied to the gimbal yaw command.");
@@ -530,6 +535,12 @@ private:
       "mock_q_yaw", 0.0, "Mock gimbal yaw angle in radians.");
     mock_q_pitch_ = declare_described_parameter<double>(
       "mock_q_pitch", 0.0, "Mock gimbal pitch angle in radians.");
+    capture_gimbal_yaw_center_on_startup_ = declare_described_parameter<bool>(
+      "capture_gimbal_yaw_center_on_startup", false,
+      "Treat the first valid real gimbal yaw sample as the base-forward reference.");
+    configured_gimbal_yaw_center_ = declare_described_parameter<double>(
+      "gimbal_yaw_center", 0.0,
+      "Fixed real gimbal yaw reference when startup capture is disabled.");
 
     if (center_reference_ != "image_center" && center_reference_ != "principal_point") {
       throw std::invalid_argument(
@@ -538,6 +549,11 @@ private:
     if (!std::isfinite(yaw_sign_) || std::abs(yaw_sign_) < 1e-9 ||
         !std::isfinite(pitch_sign_) || std::abs(pitch_sign_) < 1e-9) {
       throw std::invalid_argument("yaw_sign and pitch_sign must be finite and non-zero");
+    }
+    if (!std::isfinite(base_yaw_sign_) || std::abs(base_yaw_sign_) < 1e-9 ||
+        !std::isfinite(configured_gimbal_yaw_center_)) {
+      throw std::invalid_argument(
+        "base_yaw_sign must be finite/non-zero and gimbal_yaw_center must be finite");
     }
     if (min_depth_confidence_ < 0.0 || min_depth_confidence_ > 1.0 ||
         !finite_positive(min_valid_depth_) ||
@@ -586,6 +602,25 @@ private:
   void platform_state_callback(const vision_servo_msgs::msg::PlatformState::ConstSharedPtr msg)
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!msg->gimbal_connected) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Waiting for a connected gimbal before accepting PlatformState yaw");
+      return;
+    }
+    if (!std::isfinite(msg->gimbal_yaw) || !std::isfinite(msg->gimbal_pitch)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Ignoring non-finite gimbal state in PlatformState");
+      return;
+    }
+    if (!platform_state_received_ && capture_gimbal_yaw_center_on_startup_) {
+      captured_gimbal_yaw_center_ = msg->gimbal_yaw;
+      gimbal_yaw_center_captured_ = true;
+      RCLCPP_INFO(
+        get_logger(), "Captured gimbal forward reference: yaw=%.6f rad",
+        captured_gimbal_yaw_center_);
+    }
     platform_state_received_ = true;
     platform_q_yaw_ = msg->gimbal_yaw;
     platform_q_pitch_ = msg->gimbal_pitch;
@@ -876,7 +911,8 @@ private:
 
     // ── 步骤 5: 底盘偏航速度（云台偏航角跟踪） ───────────────────
     //
-    //   base_wz = K_base_yaw × q_yaw   (if |q_yaw| > deadband)
+    //   base_wz = base_yaw_sign × K_base_yaw × q_yaw
+    //   q_yaw = wrap(measured_yaw - startup_or_fixed_center)
     //
     // q_yaw 是云台相对于底盘中心的偏航角度。
     // 当云台转动跟踪目标后，q_yaw 偏离 0，底盘通过转动自身将云台带回中心。
@@ -885,7 +921,8 @@ private:
     if (enable_base_yaw_ &&
         (use_mock_gimbal_state_ || platform_state_received_) &&
         std::abs(q_yaw) >= q_yaw_deadband_) {
-      base_wz = std::clamp(k_base_yaw_ * q_yaw, -max_base_wz_, max_base_wz_);
+      base_wz = mvp_yaw_control::base_yaw_command(
+        q_yaw, k_base_yaw_, base_yaw_sign_, q_yaw_deadband_, max_base_wz_);
     }
 
     // ── 步骤 6: 云台指令（图像误差跟踪） ─────────────────────────
@@ -1070,11 +1107,11 @@ private:
    * 来源优先级：
    *   1. use_mock_gimbal_state_=true → 使用参数 mock_q_yaw_（固定值，用于独立测试）
    *   2. 从未收到 PlatformState → 使用 mock_q_yaw_ 回退 + 日志警告
-   *   3. 正常模式 → 使用 platform_state_callback 缓存的 platform_q_yaw_
+   *   3. 正常模式 → 返回相对于启动/固定零位的最短角距离
    *
    * mock 模式默认 q_yaw=0，意味着底盘偏航通道始终输出零 — 适合单纯测试云台跟踪。
    *
-   * @return 当前云台偏航角 (rad)。
+   * @return 当前云台相对底盘正前方的偏航误差 (rad)，范围 [-pi, pi]。
    */
   double current_gimbal_yaw()
   {
@@ -1089,7 +1126,11 @@ private:
       return mock_q_yaw_;
     }
 
-    return platform_q_yaw_;
+    const double reference =
+      capture_gimbal_yaw_center_on_startup_ && gimbal_yaw_center_captured_
+      ? captured_gimbal_yaw_center_
+      : configured_gimbal_yaw_center_;
+    return mvp_yaw_control::wrapped_angle_error(platform_q_yaw_, reference);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1202,6 +1243,7 @@ private:
   double k_gimbal_y_ = 0.6;              ///< 云台俯仰增益 (rad/s / normalized_error)
   double k_base_z_ = 0.4;                ///< 底盘前向增益 (m/s / m_depth_error)
   double k_base_yaw_ = 0.5;              ///< 底盘偏航增益 (rad/s / rad_yaw_error)
+  double base_yaw_sign_ = -1.0;           ///< 云台相对偏航到 ROS angular.z 的方向标定
   double yaw_sign_ = -1.0;
   double pitch_sign_ = -1.0;
 
@@ -1247,6 +1289,10 @@ private:
   // ── K) Mock 云台状态（独立测试用）──────────────────────────────
   double mock_q_yaw_ = 0.0;               ///< mock 云台偏航角 (rad)
   double mock_q_pitch_ = 0.0;             ///< mock 云台俯仰角 (rad)
+  bool capture_gimbal_yaw_center_on_startup_ = false;
+  double configured_gimbal_yaw_center_ = 0.0;
+  double captured_gimbal_yaw_center_ = 0.0;
+  bool gimbal_yaw_center_captured_ = false;
 
   // ── L) 运行时状态 — 目标数据 ────────────────────────────────────
   Target active_target_;                  ///< 当前伺服跟踪的目标（值拷贝）

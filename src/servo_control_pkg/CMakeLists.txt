@@ -152,6 +152,10 @@ if(BUILD_TESTING)
     target_include_directories(test_mvp_safety PRIVATE include)
     ament_target_dependencies(test_mvp_safety vision_servo_msgs)
   endif()
+  ament_add_gtest(test_mvp_yaw_control test/test_mvp_yaw_control.cpp)
+  if(TARGET test_mvp_yaw_control)
+    target_include_directories(test_mvp_yaw_control PRIVATE include)
+  endif()
 endif()
 
 # ── 启动文件和配置 ────────────────────────────────────────────────

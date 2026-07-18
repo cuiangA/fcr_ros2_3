@@ -43,6 +43,7 @@ def generate_launch_description():
             "mvp_config": LaunchConfiguration("mvp_config"),
             "yaw_sign": LaunchConfiguration("yaw_sign"),
             "pitch_sign": LaunchConfiguration("pitch_sign"),
+            "base_yaw_sign": LaunchConfiguration("base_yaw_sign"),
         }.items(),
     )
 
@@ -90,6 +91,11 @@ def generate_launch_description():
             "pitch_sign",
             default_value="-1.0",
             description="RS2 pitch direction multiplier; verify with a vertical test.",
+        ),
+        DeclareLaunchArgument(
+            "base_yaw_sign",
+            default_value="-1.0",
+            description="Relative gimbal yaw to ROS base angular.z direction.",
         ),
         system,
         TimerAction(period=4.0, actions=[mvp]),

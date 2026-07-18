@@ -77,12 +77,18 @@ ros2 launch bringup_pkg fcr_mvp_gimbal_follow.launch.py \
 
 只有模式2通过后才能运行，并且首次必须保持底盘悬空：
 
+启动前先用手动模式把云台物理朝向调整为底盘正前方，然后停止手动模式。协同控制器
+会把收到的第一帧有效 RS2 yaw 记录为相对零位；这是必须步骤，因为 RS2 编码器的
+绝对零点不等于底盘正前方，且角度可能在 `-pi/pi` 附近回绕。
+
 ```bash
 ros2 launch bringup_pkg fcr_mvp_cooperative_yaw.launch.py \
   can_interface:=can1
 ```
 
 允许 `angular.z`，但所有 `linear.*` 必须为零。
+启动日志必须出现 `Captured gimbal forward reference`。云台向右偏离相对零位时，
+底盘应输出负 `angular.z` 右转；云台回到相对零位死区后，底盘角速度应回到零。
 
 ## 模式4：完整深度跟随
 
@@ -107,3 +113,10 @@ ros2 topic echo /remote_control/status --once
 
 两条最终指令话题都必须只有 `command_mux` 一个发布者。按 `P` 进入安全停止，
 按 `X` 锁存软件急停；软件急停不能替代物理断电。
+
+## 二代改进观察
+
+本轮分级测试只记录优化诉求，不在测试中途连续修改算法。人脸构图、云台响应速度
+以及后续测试发现的问题统一记录在
+[MVP 二代改进观察日志](mvp_v2_improvement_log.md)，待模式2到模式4完成后集中设计、
+实现和回归。

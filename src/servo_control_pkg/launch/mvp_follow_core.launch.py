@@ -28,6 +28,9 @@ def generate_launch_description():
                 "pitch_sign": ParameterValue(
                     LaunchConfiguration("pitch_sign"), value_type=float
                 ),
+                "base_yaw_sign": ParameterValue(
+                    LaunchConfiguration("base_yaw_sign"), value_type=float
+                ),
             },
         ],
     )
@@ -47,6 +50,11 @@ def generate_launch_description():
             "pitch_sign",
             default_value="-1.0",
             description="RS2 pitch direction multiplier; calibrate before full testing.",
+        ),
+        DeclareLaunchArgument(
+            "base_yaw_sign",
+            default_value="-1.0",
+            description="Direction from relative RS2 yaw to ROS base angular.z.",
         ),
         controller,
     ])
