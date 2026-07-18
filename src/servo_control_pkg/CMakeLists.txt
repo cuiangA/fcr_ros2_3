@@ -105,7 +105,7 @@ install(TARGETS control_allocator
 add_executable(servo_manager_node src/servo_manager_node.cpp)
 target_include_directories(servo_manager_node PRIVATE include)
 ament_target_dependencies(servo_manager_node
-  rclcpp rclcpp_action rclcpp_components vision_servo_msgs geometry_msgs
+  rclcpp rclcpp_action rclcpp_components vision_servo_msgs geometry_msgs sensor_msgs
   tf2_ros tf2_geometry_msgs pluginlib
 )
 target_link_libraries(servo_manager_node
@@ -139,6 +139,15 @@ pluginlib_export_plugin_description_file(servo_control_pkg plugins.xml)
 
 # ── 头文件 ────────────────────────────────────────────────────────
 install(DIRECTORY include/ DESTINATION include)
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_target_input test/test_target_input.cpp)
+  if(TARGET test_target_input)
+    target_include_directories(test_target_input PRIVATE include)
+    ament_target_dependencies(test_target_input vision_servo_msgs)
+  endif()
+endif()
 
 # ── 启动文件和配置 ────────────────────────────────────────────────
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})

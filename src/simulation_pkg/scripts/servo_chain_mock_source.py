@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish deterministic CameraInfo and a temporary 3D servo target."""
+"""Publish deterministic CameraInfo and a temporary 2D or 3D servo target."""
 
 import time
 
@@ -19,6 +19,7 @@ class ServoChainMockSource(Node):
         self.declare_parameter("active_duration_sec", 3.0)
         self.declare_parameter("camera_info_topic", "/sony/camera_info")
         self.declare_parameter("target_topic", "/perception/targets_3d")
+        self.declare_parameter("target_mode", "3d")
 
         rate = float(self.get_parameter("publish_rate_hz").value)
         if rate <= 0.0:
@@ -44,8 +45,12 @@ class ServoChainMockSource(Node):
 
         self.start_delay = float(self.get_parameter("start_delay_sec").value)
         self.active_duration = float(self.get_parameter("active_duration_sec").value)
+        self.target_mode = str(self.get_parameter("target_mode").value).lower()
+        if self.target_mode not in ("2d", "3d"):
+            raise ValueError("target_mode must be '2d' or '3d'")
         self.started_at = time.monotonic()
         self.was_active = False
+        self.target_has_ended = False
         self.timer = self.create_timer(1.0 / rate, self.publish_frame)
         self.get_logger().info(
             "Mock source ready: target starts in %.2fs and lasts %.2fs" %
@@ -73,7 +78,10 @@ class ServoChainMockSource(Node):
         if not active:
             if self.was_active:
                 self.get_logger().info("Target publishing stopped; timeout test begins")
+                self.target_has_ended = True
             self.was_active = False
+            if self.target_mode == "2d" and self.target_has_ended:
+                self.publish_lost_track(now)
             return
 
         targets = TargetArray()
@@ -86,17 +94,46 @@ class ServoChainMockSource(Node):
         target.class_name = "person"
         target.tracking_state = Target.TRACKING_STATE_CONFIRMED
         target.visible = True
-        target.bbox = [260.0, 140.0, 420.0, 400.0]
-        target.center = [340.0, 270.0]
+        if self.target_mode == "2d":
+            target.bbox = [60.0, 120.0, 220.0, 380.0]
+            target.center = [140.0, 250.0]
+        else:
+            target.bbox = [260.0, 140.0, 420.0, 400.0]
+            target.center = [340.0, 270.0]
         target.confidence = 0.95
         target.height = 260.0
         target.width = 160.0
-        target.position = [0.35, 0.0, 3.0]
+        target.position = (
+            [0.0, 0.0, 0.0] if self.target_mode == "2d"
+            else [0.35, 0.0, 3.0])
         target.velocity = [0.0, 0.0, 0.0]
-        target.depth_confidence = 1.0
+        target.depth_confidence = 0.0 if self.target_mode == "2d" else 1.0
         targets.targets = [target]
         self.target_pub.publish(targets)
         self.was_active = True
+
+    def publish_lost_track(self, stamp):
+        """Keep publishing a LOST track to prove it cannot refresh servo timeout."""
+        targets = TargetArray()
+        targets.header.stamp = stamp
+        targets.header.frame_id = "camera_optical_link"
+        targets.tracking_id = 1
+        target = Target()
+        target.header = targets.header
+        target.id = 1
+        target.class_name = "person"
+        target.tracking_state = Target.TRACKING_STATE_LOST
+        target.visible = False
+        target.bbox = [60.0, 120.0, 220.0, 380.0]
+        target.center = [140.0, 250.0]
+        target.confidence = 0.5
+        target.height = 260.0
+        target.width = 160.0
+        target.position = [0.0, 0.0, 0.0]
+        target.velocity = [0.0, 0.0, 0.0]
+        target.depth_confidence = 0.0
+        targets.targets = [target]
+        self.target_pub.publish(targets)
 
 
 def main(args=None):

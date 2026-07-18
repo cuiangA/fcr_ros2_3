@@ -39,6 +39,7 @@
   <depend>pluginlib</depend>               <!-- 动态控制器插件加载 -->
 
   <exec_depend>simulation_pkg</exec_depend> <!-- MVP mock/2D sim launch 运行时节点 -->
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

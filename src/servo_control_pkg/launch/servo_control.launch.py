@@ -13,7 +13,8 @@
   - velocity_commander：速度指令发布器（限幅 + 转发）
 
 用法：
-  ros2 launch servo_control_pkg servo_control.launch.py controller_plugin:=servo_control_pkg::PBVSController
+  ros2 launch servo_control_pkg servo_control.launch.py \
+    controller_plugin:=servo_control_pkg::PBVSController
 """
 
 from launch import LaunchDescription
@@ -34,7 +35,9 @@ def generate_launch_description():
     cmd_vel_output = LaunchConfiguration("cmd_vel_output")
     cmd_gimbal_output = LaunchConfiguration("cmd_gimbal_output")
     camera_info_input = LaunchConfiguration("camera_info_input")
+    target_input = LaunchConfiguration("target_input")
     target_timeout = LaunchConfiguration("target_timeout")
+    allow_chassis_translation = LaunchConfiguration("allow_chassis_translation")
     enable_velocity_commander = LaunchConfiguration("enable_velocity_commander")
 
     config_dir = PathJoinSubstitution([
@@ -57,10 +60,12 @@ def generate_launch_description():
             {"controller_plugin": controller_plugin,
              "allocation_ratio": allocation_ratio,
              "auto_start": ParameterValue(auto_start, value_type=bool),
-             "target_timeout": ParameterValue(target_timeout, value_type=float)},
+             "target_timeout": ParameterValue(target_timeout, value_type=float),
+             "allow_chassis_translation": ParameterValue(
+                 allow_chassis_translation, value_type=bool)},
         ],
         remappings=[
-            ("/perception/targets_3d", "/perception/targets_3d"),  # 输入：3D 目标位姿
+            ("/perception/targets_3d", target_input),              # 输入：2D/3D目标
             ("/platform/state", "/platform/state"),                # 输入：平台状态
             ("/camera/camera_info", camera_info_input),             # 输入：相机内参
             ("/cmd_vel", cmd_vel_output),                          # 输出：底盘速度指令
@@ -106,6 +111,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "camera_info_input", default_value="/camera/camera_info",
             description="相机内参输入话题"),
+        DeclareLaunchArgument(
+            "target_input", default_value="/perception/targets_3d",
+            description="TargetArray输入话题，可接2D tracks或3D targets"),
+        DeclareLaunchArgument(
+            "allow_chassis_translation", default_value="false",
+            description="是否允许视觉伺服自动前后/横向移动底盘"),
         DeclareLaunchArgument(
             "cmd_vel_output", default_value="/cmd_vel",
             description="底盘输出话题；使用安全仲裁时设为/auto/cmd_vel"),

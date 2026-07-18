@@ -85,6 +85,7 @@ def generate_launch_description():
                 "allocation_ratio": f(allocation_ratio),
                 "desired_depth": f(desired_depth),
                 "auto_start": True,
+                "allow_chassis_translation": True,
                 "publish_unstamped_cmd_vel": False,
                 "use_sim_time": False,
             },

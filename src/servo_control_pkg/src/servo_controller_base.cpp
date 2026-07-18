@@ -126,8 +126,12 @@ bool ServoControllerBase::setGoalFromTarget(
   }
 
   const double current_depth = target.position[2];
-  if (desired_depth > 0.0 && current_depth > 0.0) {
-    const double scale = std::clamp(current_depth / desired_depth, 0.1, 10.0);
+  if (desired_depth > 0.0) {
+    // 纯2D轨迹没有可靠深度。此时仍应把目标中心拉到相机主点，但保持
+    // 首帧 bbox 尺度，避免把“首次看到的位置”误判为已经收敛。
+    const double scale = current_depth > 0.0
+      ? std::clamp(current_depth / desired_depth, 0.1, 10.0)
+      : 1.0;
     const double desired_w = std::max(1.0, bbox_w * scale);
     const double desired_h = std::max(1.0, bbox_h * scale);
 

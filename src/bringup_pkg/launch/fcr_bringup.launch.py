@@ -109,9 +109,13 @@ def generate_launch_description():
         PathJoinSubstitution([servo_share, "launch", "servo_control.launch.py"]),
         launch_arguments={
             "controller_plugin": controller_plugin,
+            "allocation_ratio": LaunchConfiguration("servo_allocation_ratio"),
             "auto_start": LaunchConfiguration("servo_auto_start"),
             "target_timeout": LaunchConfiguration("servo_target_timeout"),
             "camera_info_input": LaunchConfiguration("servo_camera_info_topic"),
+            "target_input": LaunchConfiguration("servo_target_topic"),
+            "allow_chassis_translation": LaunchConfiguration(
+                "servo_allow_chassis_translation"),
             "cmd_vel_output": "/auto/cmd_vel",
             "cmd_gimbal_output": "/auto/cmd_gimbal",
         }.items(),
@@ -236,7 +240,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "enable_servo", default_value="false",
-            description="融合前保持false；仅在有效3D目标源可用时启动控制闭环",
+            description="是否启动视觉伺服；默认关闭，由操作者显式授权",
         ),
         DeclareLaunchArgument(
             "servo_auto_start", default_value="false",
@@ -249,6 +253,18 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "servo_camera_info_topic", default_value="/sony/camera_info",
             description="伺服控制使用的CameraInfo话题",
+        ),
+        DeclareLaunchArgument(
+            "servo_target_topic", default_value="/perception/tracks",
+            description="伺服使用的TargetArray；第二阶段直接使用2D跟踪结果",
+        ),
+        DeclareLaunchArgument(
+            "servo_allow_chassis_translation", default_value="false",
+            description="无可靠深度前保持false，仅允许云台和底盘转向",
+        ),
+        DeclareLaunchArgument(
+            "servo_allocation_ratio", default_value="0.5",
+            description="偏航分配比例：0为纯云台，1为纯底盘",
         ),
 
         # 阶段 1：平台驱动 (t=0s)

@@ -79,6 +79,7 @@ def generate_launch_description():
             {"controller_plugin": "servo_control_pkg::PBVSController",
              "allocation_ratio": 1.0,
              "auto_start": True,
+             "allow_chassis_translation": True,
              "publish_unstamped_cmd_vel": True},
         ],
     )

@@ -10,6 +10,7 @@ install(PROGRAMS
   scripts/coop_sim.py
   scripts/servo_chain_mock_source.py
   scripts/servo_chain_acceptance.py
+  scripts/servo_2d_acceptance.py
   scripts/servo_bag_eval_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
