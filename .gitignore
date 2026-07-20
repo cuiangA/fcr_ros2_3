@@ -14,6 +14,7 @@ __pycache__/
 *.egg-info/
 yolo_env/
 runs/
+.venv/
 
 # OS
 .DS_Store
