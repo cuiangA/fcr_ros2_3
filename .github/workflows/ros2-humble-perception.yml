@@ -1,0 +1,50 @@
+name: ROS 2 Humble perception
+
+on:
+  push:
+    paths:
+      - ".github/workflows/ros2-humble-perception.yml"
+      - "src/vision_servo_msgs/**"
+      - "src/perception_pkg/**"
+      - "src/sony_camera_pkg/**"
+  pull_request:
+    paths:
+      - ".github/workflows/ros2-humble-perception.yml"
+      - "src/vision_servo_msgs/**"
+      - "src/perception_pkg/**"
+      - "src/sony_camera_pkg/**"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    container: ros:humble-ros-base-jammy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          apt-get update
+          rosdep update
+          rosdep install --from-paths \
+            src/vision_servo_msgs src/perception_pkg src/sony_camera_pkg \
+            --ignore-src --rosdistro humble -r -y
+
+      - name: Build perception packages without proprietary SDK or model
+        shell: bash
+        run: |
+          . /opt/ros/humble/setup.bash
+          colcon build --event-handlers console_direct+ \
+            --packages-up-to perception_pkg sony_camera_pkg \
+            --cmake-args \
+              -DPERCEPTION_BUILD_LEGACY_FUSION=OFF \
+              -DPERCEPTION_ENABLE_TENSORRT=OFF
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          . /opt/ros/humble/setup.bash
+          . install/setup.bash
+          colcon test --event-handlers console_direct+ \
+            --packages-select perception_pkg
+          colcon test-result --verbose

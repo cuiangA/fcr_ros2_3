@@ -8,8 +8,8 @@
  *
  * QoS 配置说明：
  *   - image()：       BEST_EFFORT + KEEP_LAST(1) — 传感器数据允许丢帧
- *   - detections()：  RELIABLE + KEEP_LAST(5)    — 检测结果不能丢失
- *   - camera_info()： RELIABLE + TRANSIENT_LOCAL — 迟加入节点也能获取
+ *   - perception()：  RELIABLE + KEEP_LAST(1)    — 只保留最新感知结果
+ *   - camera_info()： BEST_EFFORT + VOLATILE     — 兼容常见厂商相机驱动
  */
 
 #pragma once
@@ -26,28 +26,30 @@ namespace perception_pkg::qos {
  * 适用于高频传感器数据流，丢弃旧帧优于排队积压过时数据。
  */
 inline rclcpp::QoS image() {
-  return rclcpp::SensorDataQoS();
+  return rclcpp::SensorDataQoS().keep_last(1);
 }
 
 /**
  * @brief 检测/跟踪结果的 QoS 配置。
  *
- * RELIABLE（可靠）+ KEEP_LAST(depth=5)：
- * 检测结果对下游控制至关重要，不允许丢帧；5 帧缓存容忍短暂的处理抖动。
+ * RELIABLE（可靠）+ KEEP_LAST(depth=1)：
+ * 感知结果用于闭环控制，旧帧排队比偶发丢帧更危险，因此只保留最新帧。
  */
-inline rclcpp::QoS detections() {
-  return rclcpp::QoS(5).reliable();
+inline rclcpp::QoS perception() {
+  return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().durability_volatile();
 }
+
+// 兼容现有调用点；新代码使用 perception()。
+inline rclcpp::QoS detections() { return perception(); }
 
 /**
  * @brief 相机内参/标定信息的 QoS 配置。
  *
- * RELIABLE + TRANSIENT_LOCAL：
- * TRANSIENT_LOCAL 替代 ROS1 的 latching 机制——
- * 迟加入的订阅者也能收到最后一次发布的内参数据。
+ * 厂商驱动对 CameraInfo 的 QoS 并不统一。订阅端使用 BEST_EFFORT +
+ * VOLATILE，可以同时兼容 SensorDataQoS 和 RELIABLE 发布者。
  */
 inline rclcpp::QoS camera_info() {
-  return rclcpp::QoS(1).reliable().transient_local();
+  return rclcpp::SensorDataQoS().keep_last(1);
 }
 
 }  // namespace perception_pkg::qos

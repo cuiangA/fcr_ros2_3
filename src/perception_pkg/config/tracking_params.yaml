@@ -1,8 +1,47 @@
-# perception_pkg/config/tracking_params.yaml
-# 多目标跟踪节点参数（SORT/ByteTrack 风格卡尔曼滤波跟踪器）
 tracking_node:
   ros__parameters:
-    max_age: 30        # 轨迹存活最大帧数（超时未检测到则删除该轨迹）
-    min_hits: 3        # 轨迹确认所需的最小连续命中帧数（防止虚假检测）
-    iou_threshold: 0.3 # 检测框与轨迹预测框关联的 IoU 阈值（低于此值视为不匹配）
-    camera_frame: "camera_link"  # 相机在 TF 树中的坐标系名称
+    tracker_type: "bytetrack"         # bytetrack (default) or legacy_iou
+
+    # ByteTrack V2: state-specific association + XYAH Kalman + delayed ID creation.
+    track_high_threshold: 0.50
+    track_low_threshold: 0.10
+    new_track_threshold: 0.65
+    confirmed_match_min_iou: 0.25
+    lost_match_min_iou: 0.10
+    second_match_min_iou: 0.20
+    unconfirmed_match_min_iou: 0.30
+    confirmed_center_gate: 0.70
+    lost_center_gate: 1.50
+    minimum_size_ratio: 0.50
+    maximum_size_ratio: 2.00
+    iou_cost_weight: 0.55
+    center_cost_weight: 0.30
+    size_cost_weight: 0.15
+    confirmed_mahalanobis_gate: 16.0
+    lost_mahalanobis_gate: 36.0
+    duplicate_iou_threshold: 0.85
+    lost_timeout_seconds: 2.5       # Retain an established ID through short occlusion
+    min_confirm_hits: 3
+    new_track_delay_frames: 2       # Anonymous-candidate floor; hidden mode also waits min_confirm_hits
+    lost_new_track_suppression_frames: 10
+    fuse_detection_score: true
+    publish_tentative_tracks: false
+    enable_mahalanobis_gating: true
+    lost_recovery_suppression: true
+
+    # Sparse optical-flow global camera motion compensation.
+    enable_camera_motion_compensation: true
+    gmc_max_width: 320
+    gmc_max_features: 200
+    gmc_min_inliers: 20
+    gmc_ransac_threshold: 2.0
+
+    # Legacy IoU tracker parameters, used only with tracker_type=legacy_iou.
+    max_age: 15
+    min_hits: 3
+    iou_threshold: 0.3
+    camera_frame: ""                 # Empty preserves the detector frame_id
+    auto_select: true
+    class_filter: "person"
+    input_timeout_seconds: 2.0
+    performance_log_period: 5.0

@@ -1,0 +1,26 @@
+perception_visualizer_node:
+  ros__parameters:
+    # Keep bounded because each entry holds a full-resolution Sony frame.
+    sync_cache_size: 12
+    status_publish_rate_hz: 5.0
+    # The remote path is a capacity-one latest-frame mailbox. Frames older
+    # than max_frame_age_ms are discarded instead of entering the WebSocket.
+    remote_publish_rate_hz: 10.0
+    remote_max_width: 960
+    jpeg_quality: 65
+    max_frame_age_ms: 300
+    diagnostic_timeout_sec: 3.0
+    optional_input_timeout_sec: 2.0
+
+    draw_detections: true
+    draw_tracks: true
+    draw_status_overlay: true
+    render_without_subscribers: false
+
+    # Deployment identity shown in the overlay and /perception/monitor_status.
+    yolo_model: "yolov8n"
+    model_path: ""
+    inference_backend: "tensorrt"
+
+    # Reserved read-only inputs. Disabled until 3D fusion/control is enabled.
+    enable_future_inputs: false

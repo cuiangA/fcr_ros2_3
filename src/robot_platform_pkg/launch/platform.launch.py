@@ -20,6 +20,7 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -27,6 +28,9 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     use_sim = LaunchConfiguration("use_sim")
+    enable_imu = LaunchConfiguration("enable_imu")
+    enable_chassis = LaunchConfiguration("enable_chassis")
+    can_interface = LaunchConfiguration("can_interface")
 
     # 配置文件目录
     config_dir = PathJoinSubstitution([
@@ -41,6 +45,7 @@ def generate_launch_description():
         output="screen",
         parameters=[PathJoinSubstitution([config_dir, "chassis_params.yaml"]),
                     {"use_sim": use_sim}],
+        condition=IfCondition(enable_chassis),
     )
 
     # ── 云台驱动节点 ──────────────────────────────────────────────
@@ -50,7 +55,10 @@ def generate_launch_description():
         name="gimbal_driver",
         output="screen",
         parameters=[PathJoinSubstitution([config_dir, "gimbal_params.yaml"]),
-                    {"use_sim": use_sim}],
+                    {
+                        "use_sim": use_sim,
+                        "can_interface": can_interface,
+                    }],
     )
 
     # ── IMU 驱动节点 ──────────────────────────────────────────────
@@ -61,6 +69,7 @@ def generate_launch_description():
         output="screen",
         parameters=[PathJoinSubstitution([config_dir, "imu_params.yaml"]),
                     {"use_sim": use_sim}],
+        condition=IfCondition(enable_imu),
     )
 
     # ── 里程计节点 ────────────────────────────────────────────────
@@ -70,6 +79,7 @@ def generate_launch_description():
         name="odometry",
         output="screen",
         parameters=[PathJoinSubstitution([config_dir, "odometry_params.yaml"])],
+        condition=IfCondition(enable_chassis),
     )
 
     # ── 平台管理节点（状态聚合） ──────────────────────────────────
@@ -83,5 +93,14 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("use_sim", default_value="false",
                               description="是否使用仿真硬件驱动"),
+        DeclareLaunchArgument(
+            "enable_imu", default_value="true",
+            description="是否启动IMU驱动；真实BNO055后端完成前应设为false"),
+        DeclareLaunchArgument(
+            "enable_chassis", default_value="true",
+            description="是否启动底盘驱动和里程计；纯云台测试应设为false"),
+        DeclareLaunchArgument(
+            "can_interface", default_value="can0",
+            description="DJI RS2云台使用的Linux SocketCAN接口"),
         chassis_node, gimbal_node, imu_node, odom_node, platform_mgr,
     ])

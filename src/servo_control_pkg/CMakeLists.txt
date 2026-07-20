@@ -105,7 +105,7 @@ install(TARGETS control_allocator
 add_executable(servo_manager_node src/servo_manager_node.cpp)
 target_include_directories(servo_manager_node PRIVATE include)
 ament_target_dependencies(servo_manager_node
-  rclcpp rclcpp_action rclcpp_components vision_servo_msgs geometry_msgs
+  rclcpp rclcpp_action rclcpp_components vision_servo_msgs geometry_msgs sensor_msgs
   tf2_ros tf2_geometry_msgs pluginlib
 )
 target_link_libraries(servo_manager_node
@@ -119,7 +119,7 @@ install(TARGETS servo_manager_node DESTINATION lib/${PROJECT_NAME})
 add_executable(mvp_follow_controller_node src/mvp_follow_controller_node.cpp)
 target_include_directories(mvp_follow_controller_node PRIVATE include)
 ament_target_dependencies(mvp_follow_controller_node
-  rclcpp rcl_interfaces vision_servo_msgs geometry_msgs Eigen3
+  rclcpp rcl_interfaces vision_servo_msgs geometry_msgs sensor_msgs Eigen3
 )
 target_link_libraries(mvp_follow_controller_node servo_qos)
 install(TARGETS mvp_follow_controller_node DESTINATION lib/${PROJECT_NAME})
@@ -139,6 +139,24 @@ pluginlib_export_plugin_description_file(servo_control_pkg plugins.xml)
 
 # ── 头文件 ────────────────────────────────────────────────────────
 install(DIRECTORY include/ DESTINATION include)
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_target_input test/test_target_input.cpp)
+  if(TARGET test_target_input)
+    target_include_directories(test_target_input PRIVATE include)
+    ament_target_dependencies(test_target_input vision_servo_msgs)
+  endif()
+  ament_add_gtest(test_mvp_safety test/test_mvp_safety.cpp)
+  if(TARGET test_mvp_safety)
+    target_include_directories(test_mvp_safety PRIVATE include)
+    ament_target_dependencies(test_mvp_safety vision_servo_msgs)
+  endif()
+  ament_add_gtest(test_mvp_yaw_control test/test_mvp_yaw_control.cpp)
+  if(TARGET test_mvp_yaw_control)
+    target_include_directories(test_mvp_yaw_control PRIVATE include)
+  endif()
+endif()
 
 # ── 启动文件和配置 ────────────────────────────────────────────────
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})

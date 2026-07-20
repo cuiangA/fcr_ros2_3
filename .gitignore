@@ -12,6 +12,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+yolo_env/
+runs/
 
 # OS
 .DS_Store
@@ -38,4 +40,11 @@ bags/
 classifier/bert_intent_output/model.safetensors
 classifier/bert_intent_output/training_args.bin
 
+# Sony Camera Remote SDK is proprietary and must be installed locally.
+# Keep all vendor headers, sample sources, and ARM64 shared libraries out of Git.
+src/sony_camera_pkg/sdk/
 
+# Runtime ML artifacts are downloaded from a release or generated on the target.
+src/perception_pkg/models/*
+!src/perception_pkg/models/README.md
+!src/perception_pkg/models/manifest.json

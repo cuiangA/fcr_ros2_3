@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "filename": "yolov8n.onnx",
+  "sha256": "e374e187b211da8b9db2a0863ceac5ff11d903cbf59a36e32b34aa8d178f527b",
+  "url": "https://github.com/cuiangA/fcr_ros2_3/releases/download/perception-models-v1/yolov8n.onnx",
+  "format": "onnx",
+  "opset": 12,
+  "input_shape": [1, 3, 640, 640],
+  "output_shape": [1, 84, 8400],
+  "classes": "COCO-80",
+  "source": "Ultralytics COCO-pretrained YOLOv8n"
+}

@@ -1,0 +1,31 @@
+command_mux:
+  ros__parameters:
+    default_mode: "manual"
+    publish_rate_hz: 20.0
+    heartbeat_timeout_ms: 250
+    command_timeout_ms: 200
+    zero_dwell_ms: 200
+    max_linear_x: 0.05
+    max_linear_y: 0.05
+    max_angular_z: 0.25
+    max_accel_x: 0.15
+    max_accel_y: 0.15
+    max_accel_yaw: 0.50
+    max_gimbal_yaw_rate: 0.25
+    max_gimbal_pitch_rate: 0.20
+    frame_id: "base_link"
+
+keyboard_platform_teleop:
+  ros__parameters:
+    publish_rate_hz: 20.0
+    key_timeout_sec: 0.25
+    linear_x: 0.03
+    linear_y: 0.03
+    angular_z: 0.15
+    gimbal_yaw_rate: 0.15
+    gimbal_pitch_rate: 0.12
+    speed_scale: 1.0
+    speed_step: 0.25
+    min_speed_scale: 0.25
+    max_speed_scale: 1.5
+    frame_id: "base_link"

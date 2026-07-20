@@ -70,16 +70,17 @@
  *
  * ── 话题 QoS 策略 ─────────────────────────────────────────────────
  *
- *   - /perception/targets_3d：control_cmd()（Best-effort, 低延迟）
- *   - /platform/state：platform_state()（Best-effort, 低延迟）
- *   - /camera/camera_info：TRANSIENT_LOCAL（新加入节点可立即获取历史标定）
- *   - /cmd_vel, /cmd_gimbal：control_cmd()（Best-effort, 控制指令不重传）
+ *   - /perception/targets_3d：control_cmd()（Reliable + Volatile）
+ *   - /platform/state：platform_state()（Reliable + Transient-local）
+ *   - /camera/camera_info：SensorDataQoS（Best-effort + Volatile）
+ *   - /cmd_vel, /cmd_gimbal：control_cmd()（Reliable + Volatile）
  *   - /servo/state：servo_state()（Reliable, 状态监控不丢帧）
  */
 
 #include "servo_control_pkg/servo_controller_base.hpp"
 #include "servo_control_pkg/control_allocator.hpp"
 #include "servo_control_pkg/qos.hpp"
+#include "servo_control_pkg/target_input.hpp"
 #include <vision_servo_msgs/msg/target_array.hpp>
 #include <vision_servo_msgs/msg/servo_state.hpp>
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
@@ -136,6 +137,7 @@ public:
     this->declare_parameter("smoothing_alpha", 0.7);         // 云台指令平滑 (0-1, ↑快)
     this->declare_parameter("auto_start", false);            // 是否自动开始伺服
     this->declare_parameter("target_timeout", 0.5);          // 目标丢失判定超时 (s)
+    this->declare_parameter("allow_chassis_translation", false);  // 是否允许自动平移
     this->declare_parameter("publish_unstamped_cmd_vel", false);  // 仿真兼容：发布无时间戳 Twist
 
     // ── 控制器公共参数（中转：servo_manager → controller_->configureFromNode()）──
@@ -157,6 +159,8 @@ public:
     std::string plugin_name = this->get_parameter("controller_plugin").as_string();
     auto_start_ = this->get_parameter("auto_start").as_bool();
     target_timeout_ = this->get_parameter("target_timeout").as_double();
+    allow_chassis_translation_ =
+      this->get_parameter("allow_chassis_translation").as_bool();
     publish_unstamped_cmd_vel_ =
       this->get_parameter("publish_unstamped_cmd_vel").as_bool();
 
@@ -212,11 +216,11 @@ public:
       std::bind(&ServoManagerNode::platform_callback, this, std::placeholders::_1));
 
     // 相机内参标定信息。
-    // TRANSIENT_LOCAL QoS：发布者只需发布一次，所有迟加入的订阅者均可获取
-    // 最新的标定消息，无需等待发布者周期性重发。这对离线标定或启动顺序不
-    // 固定的多节点系统至关重要。
+    // 使用 SensorDataQoS（BEST_EFFORT + VOLATILE）兼容 Sony 等相机驱动的
+    // 常见发布策略，避免 RELIABLE 订阅端无法匹配 BEST_EFFORT 发布端。
+    // 相机驱动应周期性发布 CameraInfo，使迟启动的伺服节点也能完成标定。
     camera_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-      "/camera/camera_info", rclcpp::QoS(1).reliable().transient_local(),
+      "/camera/camera_info", rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&ServoManagerNode::camera_info_callback, this, std::placeholders::_1));
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -278,8 +282,10 @@ public:
       std::chrono::milliseconds(20),
       std::bind(&ServoManagerNode::control_loop, this));
 
-    RCLCPP_INFO(get_logger(), "伺服管理器已启动 (controller=%s, 50Hz loop)",
-                plugin_name.c_str());
+    RCLCPP_INFO(
+      get_logger(),
+      "伺服管理器已启动 (controller=%s, 50Hz loop, chassis_translation=%s)",
+      plugin_name.c_str(), allow_chassis_translation_ ? "enabled" : "disabled");
   }
 
   /**
@@ -299,8 +305,8 @@ private:
   /**
    * @brief 相机内参标定回调。
    *
-   * 收到 CameraInfo 消息后，提取针孔模型内参并初始化控制器。
-   * 利用 TRANSIENT_LOCAL QoS 特性，无论节点何时启动都能获取标定数据。
+   * 收到 CameraInfo 消息后，验证并提取针孔模型内参，然后初始化控制器。
+   * 订阅端使用 SensorDataQoS；相机驱动需周期性发布 CameraInfo。
    *
    * 内参矩阵 K (3×3) 在 CameraInfo::k 中的布局：
    *   K = [k[0], k[1], k[2];   = [fx,  0, cx;
@@ -313,6 +319,19 @@ private:
   void camera_info_callback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!calibrated_) {
+      const bool valid =
+        msg->width > 0 && msg->height > 0 &&
+        std::isfinite(msg->k[0]) && msg->k[0] > 1.0e-6 &&
+        std::isfinite(msg->k[4]) && msg->k[4] > 1.0e-6 &&
+        std::isfinite(msg->k[2]) && msg->k[2] >= 0.0 && msg->k[2] < msg->width &&
+        std::isfinite(msg->k[5]) && msg->k[5] >= 0.0 && msg->k[5] < msg->height;
+      if (!valid) {
+        RCLCPP_ERROR_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "拒绝无效CameraInfo: %ux%u fx=%.3f fy=%.3f cx=%.3f cy=%.3f",
+          msg->width, msg->height, msg->k[0], msg->k[4], msg->k[2], msg->k[5]);
+        return;
+      }
       camera_fx_ = msg->k[0];
       camera_fy_ = msg->k[4];
       camera_cx_ = msg->k[2];
@@ -328,11 +347,8 @@ private:
   /**
    * @brief 感知目标回调 — 缓存最新目标数组并选择当前伺服目标。
    *
-   * 目标选择策略（按优先级）：
-   *   1. tracking_id ≥ 0：搜索 targets 数组中 id 匹配的目标
-   *      - 找到 → 锁定该目标（跨帧跟踪一致性由感知管线的 tracker 保证）
-   *      - 未找到（tracker 丢帧、遮挡）→ 回退到 targets[0]
-   *   2. tracking_id < 0：直接取 targets[0]（感知管线已按置信度降序排列）
+   * 仅接受可见的 CONFIRMED/UNTRACKED 目标。tracking_id 已锁定时绝不
+   * 回退到另一个目标；LOST/不可见轨迹也不得刷新安全超时。
    *
    * 此回调仅做缓存和选择，不执行控制。实际的伺服计算在 control_loop() 中
    * 以固定频率进行，实现感知与控制的解耦。
@@ -340,31 +356,15 @@ private:
    * @note 线程安全：修改 last_target_、active_target_、last_target_time_ 均受 state_mutex_ 保护。
    */
   void target_callback(const vision_servo_msgs::msg::TargetArray::ConstSharedPtr& msg) {
-    if (!msg->targets.empty()) {
-      std::lock_guard<std::mutex> lock(state_mutex_);
-      last_target_ = msg;                       // 保持 shared_ptr，避免拷贝整个数组
-      last_target_time_ = this->now();          // 记录接收时间，用于 target_stale 判定
-
-      if (msg->tracking_id >= 0) {
-        bool found = false;
-        for (auto& t : msg->targets) {
-          if (t.id == msg->tracking_id) {
-            active_target_ = t;
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          // 跟踪 ID 未在当前帧找到：可能遮挡或 tracker 重初始化
-          active_target_ = msg->targets[0];
-        }
-      } else {
-        // 无跟踪 ID → 选择置信度最高的目标（targets[0]）
-        active_target_ = msg->targets[0];
-      }
+    const auto selected = select_actionable_target(*msg);
+    if (!selected) {
+      // 空数组、不可见轨迹或 LOST 轨迹均不得刷新安全超时。
+      return;
     }
-    // 注意：当 msg->targets 为空时，不更新 last_target_，保留上一帧数据。
-    // 连续空帧会触发 target_timeout_ 超时 → control_loop 发布零速度。
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    last_target_ = msg;
+    active_target_ = *selected;
+    last_target_time_ = this->now();
   }
 
   /**
@@ -735,6 +735,10 @@ private:
     // ControlAllocator 将单一的相机速度分解为两个执行器的协同指令。
     // 分配策略基于 allocation_ratio 参数和云台限位状态。
     auto allocation = allocator_.allocate(*cam_vel, last_platform_state_, dt);
+    if (!allow_chassis_translation_) {
+      allocation.chassis_twist.linear.x = 0.0;
+      allocation.chassis_twist.linear.y = 0.0;
+    }
 
     // ═══ 步骤 3：发布底盘速度指令 ═════════════════════════════════════
     auto twist_stamped = geometry_msgs::msg::TwistStamped();
@@ -1024,6 +1028,7 @@ private:
 
   // ── 调度参数 ────────────────────────────────────────────────────────
   double target_timeout_ = 0.5;           ///< 目标丢失判定超时 (s)
+  bool allow_chassis_translation_ = false; ///< 是否允许底盘自动平移
   bool publish_unstamped_cmd_vel_ = false; ///< 仿真兼容：额外发布无时间戳 Twist
 
   // ── 线程同步 ────────────────────────────────────────────────────────

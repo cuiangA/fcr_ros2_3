@@ -49,7 +49,7 @@
  *   │    base_vx = K_base_z × ez       深度误差 → 前向速度               │
  *   │              ez = depth - desired_distance                         │
  *   │                                                                    │
- *   │    base_wz = K_base_yaw × q_yaw  云台偏航角 → 底盘角速度           │
+ *   │    base_wz = sign × K_base_yaw × wrap(q_yaw-q_center)             │
  *   │              if |q_yaw| > deadband else 0                          │
  *   │                                                                    │
  *   │    底盘惯性大、响应慢（~2Hz），缓慢消除云台偏角，                     │
@@ -106,12 +106,15 @@
  */
 
 #include "servo_control_pkg/qos.hpp"
+#include "servo_control_pkg/mvp_safety.hpp"
+#include "servo_control_pkg/mvp_yaw_control.hpp"
 
 #include <Eigen/Dense>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
 
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
 #include <vision_servo_msgs/msg/platform_state.hpp>
@@ -124,7 +127,9 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -222,8 +227,12 @@ public:
     // 当前跟踪目标（单目标，由 tracker 或外部节点选出）。
     // 消息包含目标的 3D 位姿（相机系）、bbox、置信度等。
     target_sub_ = create_subscription<vision_servo_msgs::msg::TargetArray>(
-      target_topic_, qos::control_cmd(),
+      target_topic_, rclcpp::SensorDataQoS(),
       std::bind(&MvpFollowControllerNode::target_callback, this, std::placeholders::_1));
+
+    camera_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
+      camera_info_topic_, rclcpp::SensorDataQoS(),
+      std::bind(&MvpFollowControllerNode::camera_info_callback, this, std::placeholders::_1));
 
     // 平台状态：底盘当前线速度/角速度 + 云台 yaw/pitch 角度。
     // control_loop 需要云台偏航角 q_yaw 作为底盘偏航控制的外环反馈量。
@@ -263,9 +272,14 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "MVP follow controller started: target=%s, platform=%s, cmd_vel=%s (%s), cmd_gimbal=%s",
-      target_topic_.c_str(), platform_state_topic_.c_str(), cmd_vel_topic_.c_str(),
-      use_twist_stamped_ ? "TwistStamped" : "Twist", cmd_gimbal_topic_.c_str());
+      "MVP follow controller started: target=%s, camera_info=%s, platform=%s, "
+      "cmd_vel=%s (%s), cmd_gimbal=%s, gates[gimbal=%d,yaw=%d,translation=%d], "
+      "signs[yaw=%.1f,pitch=%.1f,base_yaw=%.1f], yaw_center=%s",
+      target_topic_.c_str(), camera_info_topic_.c_str(), platform_state_topic_.c_str(),
+      cmd_vel_topic_.c_str(), use_twist_stamped_ ? "TwistStamped" : "Twist",
+      cmd_gimbal_topic_.c_str(), enable_gimbal_tracking_, enable_base_yaw_,
+      enable_base_translation_, yaw_sign_, pitch_sign_, base_yaw_sign_,
+      capture_gimbal_yaw_center_on_startup_ ? "startup" : "fixed");
   }
 
   /**
@@ -344,6 +358,9 @@ private:
     platform_state_topic_ = declare_described_parameter<std::string>(
       "platform_state_topic", "/platform/state",
       "PlatformState topic carrying gimbal angles.");
+    camera_info_topic_ = declare_described_parameter<std::string>(
+      "camera_info_topic", "/sony/camera_info",
+      "CameraInfo topic used to configure image dimensions and intrinsics.");
     cmd_vel_topic_ = declare_described_parameter<std::string>(
       "cmd_vel_topic", "/cmd_vel",
       "Base velocity command topic.");
@@ -358,6 +375,15 @@ private:
     use_mock_gimbal_state_ = declare_described_parameter<bool>(
       "use_mock_gimbal_state", true,
       "Use mock_q_yaw/mock_q_pitch instead of PlatformState.");
+    enable_gimbal_tracking_ = declare_described_parameter<bool>(
+      "enable_gimbal_tracking", true,
+      "Allow the MVP controller to command gimbal yaw and pitch.");
+    enable_base_yaw_ = declare_described_parameter<bool>(
+      "enable_base_yaw", false,
+      "Allow chassis angular.z commands from measured gimbal yaw.");
+    enable_base_translation_ = declare_described_parameter<bool>(
+      "enable_base_translation", false,
+      "Allow chassis linear.x only when metric depth passes every safety gate.");
 
     // ── C) 相机参数 ──────────────────────────────────────────────────
     // fx/fy/cx/cy ≤ 0 时自动推断为 image_width/2, image_height/2（简易估计）。
@@ -367,6 +393,12 @@ private:
       "image_height", 480, "Input image height in pixels.");
     control_rate_hz_ = declare_described_parameter<double>(
       "control_rate_hz", 50.0, "Control loop frequency in Hz.");
+    require_camera_info_ = declare_described_parameter<bool>(
+      "require_camera_info", false,
+      "Publish only zero commands until a valid CameraInfo has been received.");
+    center_reference_ = declare_described_parameter<std::string>(
+      "center_reference", "image_center",
+      "Tracking goal: image_center or principal_point.");
 
     // ── D) 期望深度 ─────────────────────────────────────────────────
     // 底盘前向速度 = K_base_z × (当前深度 - desired_distance)
@@ -392,6 +424,15 @@ private:
     k_base_yaw_ = declare_described_parameter<double>(
       "K_base_yaw", 0.5,
       "Base yaw proportional gain on gimbal yaw angle.");
+    base_yaw_sign_ = declare_described_parameter<double>(
+      "base_yaw_sign", -1.0,
+      "Direction multiplier from relative gimbal yaw to ROS base angular.z.");
+    yaw_sign_ = declare_described_parameter<double>(
+      "yaw_sign", -1.0,
+      "Hardware direction multiplier applied to the gimbal yaw command.");
+    pitch_sign_ = declare_described_parameter<double>(
+      "pitch_sign", -1.0,
+      "Hardware direction multiplier applied to the gimbal pitch command.");
 
     // ── F) IBVS 参数（云台的可选控制方式）───────────────────────────
     //
@@ -443,6 +484,13 @@ private:
       "depth_deadband", 0.2, "Deadband for depth error in meters.");
     q_yaw_deadband_ = declare_described_parameter<double>(
       "q_yaw_deadband", 0.0873, "Deadband for gimbal yaw angle in radians.");
+    min_depth_confidence_ = declare_described_parameter<double>(
+      "min_depth_confidence", 0.6,
+      "Minimum Target.depth_confidence required for chassis translation.");
+    min_valid_depth_ = declare_described_parameter<double>(
+      "min_valid_depth", 0.3, "Minimum accepted metric target depth in meters.");
+    max_valid_depth_ = declare_described_parameter<double>(
+      "max_valid_depth", 10.0, "Maximum accepted metric target depth in meters.");
 
     // ── I) 执行器限幅 ───────────────────────────────────────────────
     //
@@ -487,6 +535,31 @@ private:
       "mock_q_yaw", 0.0, "Mock gimbal yaw angle in radians.");
     mock_q_pitch_ = declare_described_parameter<double>(
       "mock_q_pitch", 0.0, "Mock gimbal pitch angle in radians.");
+    capture_gimbal_yaw_center_on_startup_ = declare_described_parameter<bool>(
+      "capture_gimbal_yaw_center_on_startup", false,
+      "Treat the first valid real gimbal yaw sample as the base-forward reference.");
+    configured_gimbal_yaw_center_ = declare_described_parameter<double>(
+      "gimbal_yaw_center", 0.0,
+      "Fixed real gimbal yaw reference when startup capture is disabled.");
+
+    if (center_reference_ != "image_center" && center_reference_ != "principal_point") {
+      throw std::invalid_argument(
+        "center_reference must be 'image_center' or 'principal_point'");
+    }
+    if (!std::isfinite(yaw_sign_) || std::abs(yaw_sign_) < 1e-9 ||
+        !std::isfinite(pitch_sign_) || std::abs(pitch_sign_) < 1e-9) {
+      throw std::invalid_argument("yaw_sign and pitch_sign must be finite and non-zero");
+    }
+    if (!std::isfinite(base_yaw_sign_) || std::abs(base_yaw_sign_) < 1e-9 ||
+        !std::isfinite(configured_gimbal_yaw_center_)) {
+      throw std::invalid_argument(
+        "base_yaw_sign must be finite/non-zero and gimbal_yaw_center must be finite");
+    }
+    if (min_depth_confidence_ < 0.0 || min_depth_confidence_ > 1.0 ||
+        !finite_positive(min_valid_depth_) ||
+        !std::isfinite(max_valid_depth_) || max_valid_depth_ <= min_valid_depth_) {
+      throw std::invalid_argument("invalid metric depth safety gate configuration");
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -506,6 +579,7 @@ private:
    */
   void target_callback(const vision_servo_msgs::msg::TargetArray::ConstSharedPtr msg)
   {
+    std::lock_guard<std::mutex> lock(state_mutex_);
     const auto selected = select_target(*msg);
     if (!selected || !is_valid_target(*selected)) {
       has_valid_target_ = false;
@@ -527,9 +601,50 @@ private:
    */
   void platform_state_callback(const vision_servo_msgs::msg::PlatformState::ConstSharedPtr msg)
   {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    if (!msg->gimbal_connected) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Waiting for a connected gimbal before accepting PlatformState yaw");
+      return;
+    }
+    if (!std::isfinite(msg->gimbal_yaw) || !std::isfinite(msg->gimbal_pitch)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Ignoring non-finite gimbal state in PlatformState");
+      return;
+    }
+    if (!platform_state_received_ && capture_gimbal_yaw_center_on_startup_) {
+      captured_gimbal_yaw_center_ = msg->gimbal_yaw;
+      gimbal_yaw_center_captured_ = true;
+      RCLCPP_INFO(
+        get_logger(), "Captured gimbal forward reference: yaw=%.6f rad",
+        captured_gimbal_yaw_center_);
+    }
     platform_state_received_ = true;
     platform_q_yaw_ = msg->gimbal_yaw;
     platform_q_pitch_ = msg->gimbal_pitch;
+  }
+
+  void camera_info_callback(const sensor_msgs::msg::CameraInfo::ConstSharedPtr msg)
+  {
+    if (msg->width == 0 || msg->height == 0 ||
+        !finite_positive(msg->k[0]) || !finite_positive(msg->k[4]) ||
+        !std::isfinite(msg->k[2]) || !std::isfinite(msg->k[5])) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Ignoring invalid CameraInfo for MVP tracking");
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    image_width_ = static_cast<int>(msg->width);
+    image_height_ = static_cast<int>(msg->height);
+    camera_fx_ = msg->k[0];
+    camera_fy_ = msg->k[4];
+    camera_cx_ = msg->k[2];
+    camera_cy_ = msg->k[5];
+    camera_info_received_ = true;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -570,19 +685,23 @@ private:
   /**
    * @brief 验证目标数据是否可用于控制。
    *
-   * 必要条件：
-   *   - depth > 0 且有限（物理上深度必须为正值）
-   *   - 像素中心坐标有限（bbox 或 center 字段有效）
+   * 必要条件：目标在当前帧可见、状态允许控制、像素中心有限。
+   * 深度不是云台/底盘偏航的前置条件；它由 translation_depth_valid()
+   * 单独验证，避免纯2D轨迹被错误拒绝。
    *
    * 无效目标会导致控制律产生 NaN 指令，必须在此过滤。
    */
   bool is_valid_target(const Target& target) const
   {
-    const double depth = target.position[2];
     const auto center = target_center_pixels(target);
-    return finite_positive(depth) &&
-      std::isfinite(center.first) &&
-      std::isfinite(center.second);
+    return mvp_safety::target_visible_for_control(target) &&
+      std::isfinite(center.first) && std::isfinite(center.second);
+  }
+
+  bool translation_depth_valid(const Target& target) const
+  {
+    return mvp_safety::metric_depth_valid(
+      target, min_depth_confidence_, min_valid_depth_, max_valid_depth_);
   }
 
   /**
@@ -641,11 +760,14 @@ private:
    */
   void control_loop()
   {
+    std::lock_guard<std::mutex> lock(state_mutex_);
     const auto current_time = now();
-    if (!has_recent_target(current_time)) {
+    if ((require_camera_info_ && !camera_info_received_) ||
+        !has_recent_target(current_time)) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 1000,
-        "MVP target lost or invalid; publishing zero base and gimbal commands");
+        "MVP not ready (camera_info=%d, target=%d); publishing zero commands",
+        camera_info_received_, has_valid_target_);
       has_valid_target_ = false;
       reset_measurement_filters();
       reset_command_filters();
@@ -728,10 +850,15 @@ private:
     const auto center = target_center_pixels(active_target_);
     const double half_width = 0.5 * static_cast<double>(image_width_);
     const double half_height = 0.5 * static_cast<double>(image_height_);
+    const double desired_x = center_reference_ == "principal_point" && camera_cx_ > 0.0
+      ? camera_cx_ : half_width;
+    const double desired_y = center_reference_ == "principal_point" && camera_cy_ > 0.0
+      ? camera_cy_ : half_height;
 
-    const double ex_raw = (center.first - half_width) / half_width;
-    const double ey_raw = (center.second - half_height) / half_height;
+    const double ex_raw = (center.first - desired_x) / half_width;
+    const double ey_raw = (center.second - desired_y) / half_height;
     const double depth_raw = active_target_.position[2];
+    const bool depth_valid = translation_depth_valid(active_target_);
 
     // ── 步骤 2: 第一级低通滤波（传感器噪声抑制）─────────────────
     //
@@ -746,17 +873,24 @@ private:
       filtered_ey_ = low_pass(ey_raw, filtered_ey_, filter_alpha_error_);
     }
 
-    if (!depth_filter_initialized_) {
-      filtered_depth_ = depth_raw;
-      depth_filter_initialized_ = true;
+    if (enable_base_translation_ && depth_valid) {
+      if (!depth_filter_initialized_) {
+        filtered_depth_ = depth_raw;
+        depth_filter_initialized_ = true;
+      } else {
+        filtered_depth_ = low_pass(depth_raw, filtered_depth_, filter_alpha_depth_);
+      }
     } else {
-      filtered_depth_ = low_pass(depth_raw, filtered_depth_, filter_alpha_depth_);
+      depth_filter_initialized_ = false;
+      filtered_depth_ = 0.0;
     }
 
     // ── 步骤 3: 死区 — 微小误差不产生指令 ───────────────────────
     const double ex = apply_deadband(filtered_ex_, ex_deadband_);
     const double ey = apply_deadband(filtered_ey_, ey_deadband_);
-    const double ez = apply_deadband(filtered_depth_ - desired_distance_, depth_deadband_);
+    const double ez = enable_base_translation_ && depth_valid
+      ? apply_deadband(filtered_depth_ - desired_distance_, depth_deadband_)
+      : 0.0;
     const double q_yaw = current_gimbal_yaw();
 
     // ── 步骤 4: 底盘前向速度（深度控制） ─────────────────────────
@@ -766,28 +900,41 @@ private:
     // 目标太远 (depth > desired) → 正前向速度（靠近）
     // 目标太近 (depth < desired) → 负前向速度（后退）
     // 注意 ez 已经过死区，|ez| < depth_deadband_ 时 base_vx = 0。
-    double base_vx = std::clamp(k_base_z_ * ez, -max_base_vx_, max_base_vx_);
+    double base_vx = enable_base_translation_
+      ? std::clamp(k_base_z_ * ez, -max_base_vx_, max_base_vx_)
+      : 0.0;
+    if (!enable_base_translation_ || !depth_valid) {
+      // Metric depth is a hard safety gate, not a signal to low-pass. A stale
+      // residual command must never survive loss of depth confidence.
+      filtered_base_vx_ = 0.0;
+    }
 
     // ── 步骤 5: 底盘偏航速度（云台偏航角跟踪） ───────────────────
     //
-    //   base_wz = K_base_yaw × q_yaw   (if |q_yaw| > deadband)
+    //   base_wz = base_yaw_sign × K_base_yaw × q_yaw
+    //   q_yaw = wrap(measured_yaw - startup_or_fixed_center)
     //
     // q_yaw 是云台相对于底盘中心的偏航角度。
     // 当云台转动跟踪目标后，q_yaw 偏离 0，底盘通过转动自身将云台带回中心。
     // 死区 0.087rad (≈5°) 防止底盘在云台微调时频繁晃动。
     double base_wz = 0.0;
-    if (std::abs(q_yaw) >= q_yaw_deadband_) {
-      base_wz = std::clamp(k_base_yaw_ * q_yaw, -max_base_wz_, max_base_wz_);
+    if (enable_base_yaw_ &&
+        (use_mock_gimbal_state_ || platform_state_received_) &&
+        std::abs(q_yaw) >= q_yaw_deadband_) {
+      base_wz = mvp_yaw_control::base_yaw_command(
+        q_yaw, k_base_yaw_, base_yaw_sign_, q_yaw_deadband_, max_base_wz_);
     }
 
     // ── 步骤 6: 云台指令（图像误差跟踪） ─────────────────────────
     //
     // 两种模式可选：
     //   use_ibvs_gimbal_=true:  单点特征 IBVS 角速度求解（考虑透视投影几何）
-    //   use_ibvs_gimbal_=false: 纯 P 控制 gimbal_yaw=-K×ex, gimbal_pitch=-K×ey
-    const auto gimbal_command = use_ibvs_gimbal_
-      ? compute_ibvs_gimbal_velocity(center.first, center.second)
-      : compute_proportional_gimbal_velocity(ex, ey);
+    //   use_ibvs_gimbal_=false: 纯 P 控制，软件符号由 yaw_sign/pitch_sign 标定
+    const auto gimbal_command = enable_gimbal_tracking_
+      ? (use_ibvs_gimbal_
+          ? compute_ibvs_gimbal_velocity(center.first, center.second)
+          : compute_proportional_gimbal_velocity(ex, ey))
+      : std::pair<double, double>{0.0, 0.0};
     double gimbal_yaw_vel = gimbal_command.first;
     double gimbal_pitch_vel = gimbal_command.second;
 
@@ -814,9 +961,9 @@ private:
     // ── 步骤 9: 节流调试日志 ─────────────────────────────────────
     RCLCPP_DEBUG_THROTTLE(
       get_logger(), *get_clock(), 500,
-      "MVP ex=%.3f ey=%.3f depth=%.3f ez=%.3f q_yaw=%.3f | "
+      "MVP ex=%.3f ey=%.3f depth=%.3f depth_ok=%d ez=%.3f q_yaw=%.3f | "
       "vx=%.3f wz=%.3f gyaw=%.3f gpitch=%.3f",
-      ex, ey, filtered_depth_, ez, q_yaw,
+      ex, ey, filtered_depth_, depth_valid, ez, q_yaw,
       command.base_vx, command.base_wz,
       command.gimbal_yaw_vel, command.gimbal_pitch_vel);
 
@@ -826,8 +973,10 @@ private:
   /**
    * @brief 纯 P 控制云台 — 线性映射图像误差到角速度。
    *
-   *   gimbal_yaw_vel   = -K_gimbal_x × ex   (ex > 0 目标在右侧 → 云台向右转)
-   *   gimbal_pitch_vel = -K_gimbal_y × ey   (ey > 0 目标在下侧 → 云台向下转)
+   *   gimbal_yaw_vel   = yaw_sign   × K_gimbal_x × ex
+   *   gimbal_pitch_vel = pitch_sign × K_gimbal_y × ey
+   *
+   * yaw_sign/pitch_sign 是真机方向标定参数，必须使执行后的像素误差绝对值减小。
    *
    * 这是最简单的控制方式，在目标接近图像中心时工作良好。
    * 当目标偏离中心较远时，透视投影的非线性会使响应不够精确。
@@ -837,8 +986,10 @@ private:
   std::pair<double, double> compute_proportional_gimbal_velocity(double ex, double ey) const
   {
     return {
-      std::clamp(-k_gimbal_x_ * ex, -max_gimbal_yaw_vel_, max_gimbal_yaw_vel_),
-      std::clamp(-k_gimbal_y_ * ey, -max_gimbal_pitch_vel_, max_gimbal_pitch_vel_)
+      std::clamp(yaw_sign_ * k_gimbal_x_ * ex,
+                 -max_gimbal_yaw_vel_, max_gimbal_yaw_vel_),
+      std::clamp(pitch_sign_ * k_gimbal_y_ * ey,
+                 -max_gimbal_pitch_vel_, max_gimbal_pitch_vel_)
     };
   }
 
@@ -887,8 +1038,10 @@ private:
     // 获取相机内参（≤0 时用半幅图像尺寸回退，相当于视场角 ~90° 的估计）
     const double fx = camera_fx_ > 0.0 ? camera_fx_ : 0.5 * static_cast<double>(image_width_);
     const double fy = camera_fy_ > 0.0 ? camera_fy_ : 0.5 * static_cast<double>(image_height_);
-    const double cx = camera_cx_ > 0.0 ? camera_cx_ : 0.5 * static_cast<double>(image_width_);
-    const double cy = camera_cy_ > 0.0 ? camera_cy_ : 0.5 * static_cast<double>(image_height_);
+    const double cx = center_reference_ == "principal_point" && camera_cx_ > 0.0
+      ? camera_cx_ : 0.5 * static_cast<double>(image_width_);
+    const double cy = center_reference_ == "principal_point" && camera_cy_ > 0.0
+      ? camera_cy_ : 0.5 * static_cast<double>(image_height_);
 
     // 焦距非法 → 零输出（安全回退）
     if (fx <= 1e-6 || fy <= 1e-6) {
@@ -941,9 +1094,9 @@ private:
     //
     // camera_wz（光轴 roll）二轴云台无法执行，忽略。
     const double yaw_rate = std::clamp(
-      -camera_omega.y(), -max_gimbal_yaw_vel_, max_gimbal_yaw_vel_);
+      yaw_sign_ * camera_omega.y(), -max_gimbal_yaw_vel_, max_gimbal_yaw_vel_);
     const double pitch_rate = std::clamp(
-      -camera_omega.x(), -max_gimbal_pitch_vel_, max_gimbal_pitch_vel_);
+      pitch_sign_ * camera_omega.x(), -max_gimbal_pitch_vel_, max_gimbal_pitch_vel_);
 
     return {yaw_rate, pitch_rate};
   }
@@ -954,11 +1107,11 @@ private:
    * 来源优先级：
    *   1. use_mock_gimbal_state_=true → 使用参数 mock_q_yaw_（固定值，用于独立测试）
    *   2. 从未收到 PlatformState → 使用 mock_q_yaw_ 回退 + 日志警告
-   *   3. 正常模式 → 使用 platform_state_callback 缓存的 platform_q_yaw_
+   *   3. 正常模式 → 返回相对于启动/固定零位的最短角距离
    *
    * mock 模式默认 q_yaw=0，意味着底盘偏航通道始终输出零 — 适合单纯测试云台跟踪。
    *
-   * @return 当前云台偏航角 (rad)。
+   * @return 当前云台相对底盘正前方的偏航误差 (rad)，范围 [-pi, pi]。
    */
   double current_gimbal_yaw()
   {
@@ -973,7 +1126,11 @@ private:
       return mock_q_yaw_;
     }
 
-    return platform_q_yaw_;
+    const double reference =
+      capture_gimbal_yaw_center_on_startup_ && gimbal_yaw_center_captured_
+      ? captured_gimbal_yaw_center_
+      : configured_gimbal_yaw_center_;
+    return mvp_yaw_control::wrapped_angle_error(platform_q_yaw_, reference);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1046,8 +1203,8 @@ private:
     gimbal_cmd.header.stamp = stamp;
     gimbal_cmd.yaw_rate = static_cast<float>(command.gimbal_yaw_vel);
     gimbal_cmd.pitch_rate = static_cast<float>(command.gimbal_pitch_vel);
-    gimbal_cmd.hold_yaw = false;     // 不锁定：目标丢失时由零速度指令处理
-    gimbal_cmd.hold_pitch = false;
+    gimbal_cmd.hold_yaw = std::abs(command.gimbal_yaw_vel) < 1e-6;
+    gimbal_cmd.hold_pitch = std::abs(command.gimbal_pitch_vel) < 1e-6;
     cmd_gimbal_pub_->publish(gimbal_cmd);
   }
 
@@ -1058,17 +1215,24 @@ private:
   // ── A) 话题名称（支持 remap）────────────────────────────────────
   std::string target_topic_;
   std::string platform_state_topic_;
+  std::string camera_info_topic_;
   std::string cmd_vel_topic_;
   std::string cmd_gimbal_topic_;
 
   // ── B) 消息格式与调试开关 ────────────────────────────────────────
   bool use_twist_stamped_ = true;         ///< true=TwistStamped, false=Twist
   bool use_mock_gimbal_state_ = true;     ///< true=使用参数 mock_q_yaw/pitch
+  bool enable_gimbal_tracking_ = true;
+  bool enable_base_yaw_ = false;
+  bool enable_base_translation_ = false;
 
   // ── C) 相机参数 ──────────────────────────────────────────────────
   int image_width_ = 640;                 ///< 图像宽度 (px)
   int image_height_ = 480;                ///< 图像高度 (px)
   double control_rate_hz_ = 50.0;         ///< 控制回路频率 (Hz)
+  bool require_camera_info_ = false;
+  bool camera_info_received_ = false;
+  std::string center_reference_ = "image_center";
 
   // ── D) 控制目标 ──────────────────────────────────────────────────
   double desired_distance_ = 2.0;         ///< 期望目标距离 (m)
@@ -1079,6 +1243,9 @@ private:
   double k_gimbal_y_ = 0.6;              ///< 云台俯仰增益 (rad/s / normalized_error)
   double k_base_z_ = 0.4;                ///< 底盘前向增益 (m/s / m_depth_error)
   double k_base_yaw_ = 0.5;              ///< 底盘偏航增益 (rad/s / rad_yaw_error)
+  double base_yaw_sign_ = -1.0;           ///< 云台相对偏航到 ROS angular.z 的方向标定
+  double yaw_sign_ = -1.0;
+  double pitch_sign_ = -1.0;
 
   // ── F) IBVS 参数（云台高级控制）────────────────────────────────
   bool use_ibvs_gimbal_ = true;           ///< true=IBVS, false=纯P控制
@@ -1096,6 +1263,9 @@ private:
   double ey_deadband_ = 0.05;             ///< 垂直误差死区（归一化单位 [-1,1]）
   double depth_deadband_ = 0.2;           ///< 深度误差死区 (m)
   double q_yaw_deadband_ = 0.0873;        ///< 云台偏航死区 (rad ≈ 5°)
+  double min_depth_confidence_ = 0.6;
+  double min_valid_depth_ = 0.3;
+  double max_valid_depth_ = 10.0;
 
   // ── H) 执行器限幅 ─────────────────────────────────────────────────
   //
@@ -1119,6 +1289,10 @@ private:
   // ── K) Mock 云台状态（独立测试用）──────────────────────────────
   double mock_q_yaw_ = 0.0;               ///< mock 云台偏航角 (rad)
   double mock_q_pitch_ = 0.0;             ///< mock 云台俯仰角 (rad)
+  bool capture_gimbal_yaw_center_on_startup_ = false;
+  double configured_gimbal_yaw_center_ = 0.0;
+  double captured_gimbal_yaw_center_ = 0.0;
+  bool gimbal_yaw_center_captured_ = false;
 
   // ── L) 运行时状态 — 目标数据 ────────────────────────────────────
   Target active_target_;                  ///< 当前伺服跟踪的目标（值拷贝）
@@ -1148,10 +1322,12 @@ private:
   // ── O) ROS2 通信接口 ─────────────────────────────────────────────
   rclcpp::Subscription<vision_servo_msgs::msg::TargetArray>::SharedPtr target_sub_;
   rclcpp::Subscription<vision_servo_msgs::msg::PlatformState>::SharedPtr platform_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_stamped_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
   rclcpp::Publisher<vision_servo_msgs::msg::GimbalCmd>::SharedPtr cmd_gimbal_pub_;
   rclcpp::TimerBase::SharedPtr control_timer_;  ///< 50 Hz wall timer
+  std::mutex state_mutex_;
 };
 
 }  // namespace servo_control_pkg
