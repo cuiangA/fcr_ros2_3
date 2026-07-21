@@ -55,9 +55,9 @@
     libcurl4-openssl-dev: 提供 libcurl 头文件和 .so
     nlohmann-json3-dev: 提供 header-only nlohmann/json.hpp
   -->
-  <build_depend>libportaudio-dev</build_depend>
-  <build_depend>libcurl4-openssl-dev</build_depend>
-  <build_depend>nlohmann-json3-dev</build_depend>
+  <build_depend>portaudio19-dev</build_depend>
+  <build_depend>libcurl-dev</build_depend>
+  <build_depend>nlohmann-json-dev</build_depend>
 
   <!--
     sherpa-onnx: 通过 pip 安装，编译期自动查找 .so 和头文件
