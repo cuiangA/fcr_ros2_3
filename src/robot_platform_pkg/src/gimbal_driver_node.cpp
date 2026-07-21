@@ -52,8 +52,9 @@ public:
     declare_parameter("control_mode", "incremental_position");
     declare_parameter("incremental_position_duration_sec", 0.1);
     declare_parameter("incremental_position_max_step_deg", 2.0);
-    declare_parameter("incremental_position_default_dt_sec", 0.05);
+    declare_parameter("incremental_position_default_dt_sec", 0.1);
     declare_parameter("incremental_position_max_dt_sec", 0.1);
+    declare_parameter("incremental_position_send_period_sec", 0.1);
     declare_parameter("debug_position_yaw_deg", 5.0);
     declare_parameter("debug_position_pitch_deg", 0.0);
     declare_parameter("debug_position_duration_sec", 0.5);
@@ -138,6 +139,7 @@ public:
     last_cmd_time_ = now();
     last_status_pub_time_ = now();
     last_incremental_cmd_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+    last_incremental_send_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     has_active_cmd_ = false;
 
     state_timer_ = create_wall_timer(
@@ -220,6 +222,9 @@ private:
     incremental_position_max_dt_sec_ = std::max(
       incremental_position_default_dt_sec_,
       get_parameter("incremental_position_max_dt_sec").as_double());
+    incremental_position_send_period_sec_ = std::max(
+      incremental_position_duration_sec_,
+      get_parameter("incremental_position_send_period_sec").as_double());
 
     const double status_rate =
       std::max(1.0, get_parameter("status_publish_rate_hz").as_double());
@@ -345,7 +350,8 @@ private:
       has_active_cmd_ = next_active_cmd;
     } else {
       if (next_active_cmd) {
-        send_incremental_position_command(safe_cmd);
+        const bool starting_new_nudge = !has_active_cmd_;
+        send_incremental_position_command(safe_cmd, starting_new_nudge);
         has_active_cmd_ = true;
       } else if (has_active_cmd_) {
         // The RS2 keeps executing the last timed position target after the
@@ -359,12 +365,13 @@ private:
     }
   }
 
-  void send_incremental_position_command(const vision_servo_msgs::msg::GimbalCmd& cmd)
+  void send_incremental_position_command(
+    const vision_servo_msgs::msg::GimbalCmd& cmd, bool force_send)
   {
     const auto now_time = now();
 
     double dt = incremental_position_default_dt_sec_;
-    if (last_incremental_cmd_time_.nanoseconds() > 0) {
+    if (!force_send && last_incremental_cmd_time_.nanoseconds() > 0) {
       dt = (now_time - last_incremental_cmd_time_).seconds();
       if (dt <= 0.0 || dt > incremental_position_max_dt_sec_) {
         dt = incremental_position_default_dt_sec_;
@@ -398,10 +405,21 @@ private:
     target_yaw_ = std::clamp(target_yaw_ + yaw_delta, -M_PI, M_PI);
     target_pitch_ = std::clamp(target_pitch_ + pitch_delta, -M_PI / 2.0, M_PI / 2.0);
 
+    // The RS2 needs at least 100 ms to execute a position command. Keep the
+    // ROS command path at 50 Hz for low input latency, but coalesce position
+    // targets so CAN frames do not overwrite an unfinished move every 20 ms.
+    if (!force_send && last_incremental_send_time_.nanoseconds() > 0 &&
+      (now_time - last_incremental_send_time_).seconds() <
+      incremental_position_send_period_sec_)
+    {
+      return;
+    }
+
     gimbal_->sendPositionCommand(
       static_cast<float>(target_yaw_),
       static_cast<float>(target_pitch_),
       static_cast<float>(incremental_position_duration_sec_));
+    last_incremental_send_time_ = now_time;
   }
 
   void sync_position_target_to_current()
@@ -425,6 +443,7 @@ private:
         static_cast<float>(target_yaw_),
         static_cast<float>(target_pitch_),
         static_cast<float>(incremental_position_duration_sec_));
+      last_incremental_send_time_ = last_incremental_cmd_time_;
     }
     has_active_cmd_ = false;
   }
@@ -597,6 +616,7 @@ private:
   rclcpp::Time last_cmd_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_status_pub_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_incremental_cmd_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_incremental_send_time_{0, 0, RCL_ROS_TIME};
   std::string can_interface_{"can0"};
   std::string control_mode_name_{"incremental_position"};
   double latest_yaw_ = 0.0;
@@ -609,8 +629,9 @@ private:
   double status_publish_period_sec_ = 0.1;
   double incremental_position_duration_sec_ = 0.1;
   double incremental_position_max_step_rad_ = 2.0 * M_PI / 180.0;
-  double incremental_position_default_dt_sec_ = 0.05;
+  double incremental_position_default_dt_sec_ = 0.1;
   double incremental_position_max_dt_sec_ = 0.1;
+  double incremental_position_send_period_sec_ = 0.1;
   int stop_command_burst_count_ = 3;
   ControlMode control_mode_ = ControlMode::IncrementalPosition;
   bool use_sim_ = false;

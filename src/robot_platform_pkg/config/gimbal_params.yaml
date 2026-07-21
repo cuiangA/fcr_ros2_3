@@ -18,8 +18,11 @@ gimbal_driver:
     control_mode: "incremental_position"  # 将 rate 积分为绝对目标，使用 RS2 已验证的绝对位置帧执行
     incremental_position_duration_sec: 0.1    # 每个位置目标指令的执行时间，最小 0.1s
     incremental_position_max_step_deg: 2.0    # 单次增量最大角度，防止低频/卡顿时跳变过大
-    incremental_position_default_dt_sec: 0.05 # 第一帧或时间异常时用于 rate→delta 的默认周期
+    # 首次点按按100ms固定步长换算，避免单个20ms采样小到落入机械死区。
+    incremental_position_default_dt_sec: 0.1
     incremental_position_max_dt_sec: 0.1      # rate→delta 时允许使用的最大周期
+    # RS2单个位置动作最少100ms，因此CAN目标最多10Hz，避免50Hz覆盖导致抖动。
+    incremental_position_send_period_sec: 0.1
     debug_position_yaw_deg: 5.0       # /gimbal/debug_position 的绝对 yaw 目标角，单位 deg
     debug_position_pitch_deg: 0.0     # /gimbal/debug_position 的绝对 pitch 目标角，单位 deg
     debug_position_duration_sec: 0.5  # /gimbal/debug_position 的运动时间，单位 s
