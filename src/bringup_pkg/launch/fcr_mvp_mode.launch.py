@@ -53,6 +53,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("can_interface", default_value="can1"),
+        # Fixed real-hardware strategy: MVP AUTO uses continuous speed commands.
+        # Manual arrow keys use the separate GimbalNudge incremental-position path.
         DeclareLaunchArgument("gimbal_control_mode", default_value="speed"),
         DeclareLaunchArgument("gimbal_speed_control_byte", default_value="128"),
         DeclareLaunchArgument("enable_chassis", default_value="false"),

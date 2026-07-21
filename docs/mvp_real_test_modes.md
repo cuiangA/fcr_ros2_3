@@ -13,6 +13,37 @@
 所有自动模式只发布 `/auto/cmd_vel` 和 `/auto/cmd_gimbal`。最终执行话题
 `/cmd_vel`、`/cmd_gimbal` 必须只有 `command_mux` 一个发布者。
 
+## 固定云台控制策略
+
+当前真机策略固定为两条彼此独立的控制链路，禁止混用：
+
+| 使用场景 | 输入话题 | 最终话题 | RS2执行方式 |
+|---|---|---|---|
+| 人工方向键 | `/teleop/gimbal_nudge` | `/cmd_gimbal_nudge` | 单次增量位置 |
+| MVP AUTO | `/auto/cmd_gimbal` | `/cmd_gimbal` | 连续速度控制 |
+
+- 方向键只产生 `GimbalNudge`，每次按键执行一个有界角度增量。
+- MVP AUTO只产生 `GimbalCmd`，由`command_mux`以连续速度指令输出。
+- `fcr_mvp_*`真机模式默认使用`gimbal_control_mode:=speed`和
+  `gimbal_speed_control_byte:=128`。
+- 普通平台bringup仍保留运行时参数覆盖，便于独立硬件调试；不得因为人工
+  nudge可动或单次隔离测试结果，擅自把AUTO链路改为nudge。
+- AUTO验收期间禁止按方向键，否则人工nudge会污染自动跟踪结论。
+
+启动MVP后必须确认实际参数：
+
+```bash
+ros2 param get /gimbal_driver control_mode
+ros2 param get /gimbal_driver speed_control_byte
+```
+
+当前预期为：
+
+```text
+String value is: speed
+Integer value is: 128
+```
+
 ## 构建与自动验收
 
 ```bash
@@ -59,6 +90,7 @@ ros2 run teleop_control_pkg keyboard_platform_teleop
 ```
 
 使用方向键确认云台方向、失联停车和急停。不要启动第二个键盘节点。
+方向键验收观察的是`/cmd_gimbal_nudge`，不能用它证明或否定AUTO速度链路。
 
 ## 模式2：纯云台自动跟踪
 
@@ -72,6 +104,18 @@ ros2 launch bringup_pkg fcr_mvp_gimbal_follow.launch.py \
 该launch不会创建底盘驱动或里程计节点。启动键盘节点，确认检测框稳定后按
 `O`。本模式 `/cmd_vel` 的线速度和角速度必须始终为零。目标丢失后应在
 300ms内保持云台。
+
+本模式的正式链路必须为：
+
+```text
+mvp_follow_controller_node
+  -> /auto/cmd_gimbal
+  -> command_mux
+  -> /cmd_gimbal
+  -> gimbal_driver(speed)
+```
+
+进入AUTO后不要按方向键。
 
 ## 模式3：云台与底盘协同偏航
 

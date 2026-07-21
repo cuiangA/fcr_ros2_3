@@ -7,9 +7,16 @@ to the actuator topics `cmd_vel` and `cmd_gimbal`.
 
 - Manual input: `teleop/cmd_vel`, `teleop/cmd_gimbal`
 - Automatic input: `auto/cmd_vel`, `auto/cmd_gimbal`
+- Manual gimbal arrow-key input: `teleop/gimbal_nudge` -> `cmd_gimbal_nudge`
 - Safety input: `teleop/heartbeat`, `teleop/deadman`, `teleop/estop`
 - Final output: `cmd_vel`, `cmd_gimbal`
 - State: `remote_control/status`
+
+The gimbal paths are intentionally different: arrow keys use bounded incremental
+position nudges, while MVP AUTO tracking uses continuous `GimbalCmd` speed control
+through `auto/cmd_gimbal -> cmd_gimbal`. Do not use manual nudge behavior to infer
+the behavior of the AUTO speed path, and do not press arrow keys during AUTO
+acceptance tests.
 
 The mux starts in `manual` mode, but outputs zero until a fresh heartbeat,
 deadman lease, and manual command are all present. Software ESTOP is latched.
