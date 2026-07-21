@@ -35,7 +35,7 @@ yolov8n.pt
 pictures/
 pictures/*.jpg
 pictures/*.png
-src/perception_test_pkg/
+src/perception_pkg/video/
 
 bags/
 classifier/bert_intent_output/model.safetensors
