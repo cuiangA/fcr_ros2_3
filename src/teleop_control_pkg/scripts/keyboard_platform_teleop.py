@@ -18,6 +18,7 @@ from typing import Optional
 
 import rclpy
 from geometry_msgs.msg import TwistStamped
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Empty, String
@@ -121,6 +122,9 @@ class KeyboardPlatformTeleop(Node):
         )
         self.gimbal_nudge_duration = max(
             float(self.get_parameter("gimbal_nudge_duration_sec").value), 0.1
+        )
+        self.parameter_callback = self.add_on_set_parameters_callback(
+            self._on_parameters_set
         )
         self.speed_scale = float(self.get_parameter("speed_scale").value)
         self.speed_step = abs(float(self.get_parameter("speed_step").value))
@@ -258,6 +262,44 @@ class KeyboardPlatformTeleop(Node):
         self.motion = Motion()
         self.deadman = True
         self.last_motion_time = self.get_clock().now()
+
+    def _on_parameters_set(self, parameters) -> SetParametersResult:
+        yaw_step_deg = math.degrees(self.gimbal_yaw_step)
+        pitch_step_deg = math.degrees(self.gimbal_pitch_step)
+        duration = self.gimbal_nudge_duration
+
+        for parameter in parameters:
+            if parameter.name == "gimbal_yaw_step_deg":
+                yaw_step_deg = float(parameter.value)
+            elif parameter.name == "gimbal_pitch_step_deg":
+                pitch_step_deg = float(parameter.value)
+            elif parameter.name == "gimbal_nudge_duration_sec":
+                duration = float(parameter.value)
+
+        if not 0.1 <= yaw_step_deg <= 5.0:
+            return SetParametersResult(
+                successful=False,
+                reason="gimbal_yaw_step_deg must be in [0.1, 5.0]",
+            )
+        if not 0.1 <= pitch_step_deg <= 5.0:
+            return SetParametersResult(
+                successful=False,
+                reason="gimbal_pitch_step_deg must be in [0.1, 5.0]",
+            )
+        if not 0.1 <= duration <= 1.0:
+            return SetParametersResult(
+                successful=False,
+                reason="gimbal_nudge_duration_sec must be in [0.1, 1.0]",
+            )
+
+        self.gimbal_yaw_step = math.radians(yaw_step_deg)
+        self.gimbal_pitch_step = math.radians(pitch_step_deg)
+        self.gimbal_nudge_duration = duration
+        self.get_logger().info(
+            "gimbal nudge updated: yaw=%.2f deg pitch=%.2f deg duration=%.2f s"
+            % (yaw_step_deg, pitch_step_deg, duration)
+        )
+        return SetParametersResult(successful=True)
 
     def _publish_gimbal_nudge(self, yaw_delta: float, pitch_delta: float) -> None:
         self.gimbal_nudge_id += 1

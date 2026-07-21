@@ -19,7 +19,7 @@ gimbal_driver:
     # DJI速度控制字。参考RS2控制器使用0x80；保留为参数便于真机回退对比。
     speed_control_byte: 128
     incremental_position_duration_sec: 0.1    # 每个位置目标指令的执行时间，最小 0.1s
-    incremental_position_max_step_deg: 3.0    # 单次点动上限；默认水平3°、俯仰2°
+    incremental_position_max_step_deg: 5.0    # 固定安全上限；键盘点动可在0.1°~5°热调
     # 首次点按按100ms固定步长换算，避免单个20ms采样小到落入机械死区。
     incremental_position_default_dt_sec: 0.1
     incremental_position_max_dt_sec: 0.1      # rate→delta 时允许使用的最大周期

@@ -38,9 +38,9 @@ public:
     max_gimbal_yaw_rate_ = declare_parameter<double>("max_gimbal_yaw_rate", 0.25);
     max_gimbal_pitch_rate_ = declare_parameter<double>("max_gimbal_pitch_rate", 0.20);
     max_gimbal_yaw_nudge_rad_ = declare_parameter<double>(
-      "max_gimbal_yaw_nudge_rad", 0.0523598776);
+      "max_gimbal_yaw_nudge_rad", 0.0872664626);
     max_gimbal_pitch_nudge_rad_ = declare_parameter<double>(
-      "max_gimbal_pitch_nudge_rad", 0.0349065850);
+      "max_gimbal_pitch_nudge_rad", 0.0872664626);
     frame_id_ = declare_parameter<std::string>("frame_id", "base_link");
     const auto default_mode = declare_parameter<std::string>("default_mode", "manual");
     if (publish_rate_hz_ <= 0.0 || max_gimbal_yaw_rate_ <= 0.0 ||
@@ -267,8 +267,8 @@ private:
   double publish_rate_hz_{50.0};
   double max_gimbal_yaw_rate_{0.25};
   double max_gimbal_pitch_rate_{0.20};
-  double max_gimbal_yaw_nudge_rad_{0.0523598776};
-  double max_gimbal_pitch_nudge_rad_{0.0349065850};
+  double max_gimbal_yaw_nudge_rad_{0.0872664626};
+  double max_gimbal_pitch_nudge_rad_{0.0872664626};
   int64_t command_timeout_ms_{200};
   std::string frame_id_{"base_link"};
   int64_t manual_gimbal_time_ms_{-1000000};
