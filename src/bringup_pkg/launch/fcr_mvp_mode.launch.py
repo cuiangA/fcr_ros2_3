@@ -16,6 +16,10 @@ def generate_launch_description():
         launch_arguments={
             "use_sim": "false",
             "can_interface": LaunchConfiguration("can_interface"),
+            "gimbal_control_mode": LaunchConfiguration("gimbal_control_mode"),
+            "gimbal_speed_control_byte": LaunchConfiguration(
+                "gimbal_speed_control_byte"
+            ),
             "enable_imu": "false",
             "enable_chassis": LaunchConfiguration("enable_chassis"),
             "model_path": LaunchConfiguration("model_path"),
@@ -49,6 +53,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("can_interface", default_value="can1"),
+        DeclareLaunchArgument("gimbal_control_mode", default_value="speed"),
+        DeclareLaunchArgument("gimbal_speed_control_byte", default_value="128"),
         DeclareLaunchArgument("enable_chassis", default_value="false"),
         DeclareLaunchArgument(
             "model_path",

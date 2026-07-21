@@ -28,6 +28,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
+#include <vision_servo_msgs/msg/gimbal_nudge.hpp>
 #include <vision_servo_msgs/msg/gimbal_status.hpp>
 
 namespace robot_platform_pkg {
@@ -50,6 +51,7 @@ public:
     declare_parameter("status_publish_rate_hz", 10.0);
     declare_parameter("stop_command_burst_count", 3);
     declare_parameter("control_mode", "incremental_position");
+    declare_parameter("speed_control_byte", 0x80);
     declare_parameter("incremental_position_duration_sec", 0.1);
     declare_parameter("incremental_position_max_step_deg", 2.0);
     declare_parameter("incremental_position_default_dt_sec", 0.1);
@@ -84,6 +86,10 @@ public:
         "/cmd_gimbal", reliable_qos,
         std::bind(&GimbalDriverNode::cmd_callback, this, std::placeholders::_1));
 
+      nudge_sub_ = create_subscription<vision_servo_msgs::msg::GimbalNudge>(
+        "/cmd_gimbal_nudge", reliable_qos,
+        std::bind(&GimbalDriverNode::nudge_callback, this, std::placeholders::_1));
+
       joint_state_pub_ = create_publisher<sensor_msgs::msg::JointState>(
         "/joint_states", reliable_qos);
 
@@ -112,8 +118,8 @@ public:
 
       RCLCPP_INFO(
         get_logger(),
-        "云台驱动配置完成 (sim=%d, can=%s, mode=%s, max_yaw_rate=%.3f, max_pitch_rate=%.3f)",
-        use_sim_, can_interface_.c_str(), control_mode_name_.c_str(),
+        "云台驱动配置完成 (sim=%d, can=%s, mode=%s, speed_ctrl=0x%02X, max_yaw_rate=%.3f, max_pitch_rate=%.3f)",
+        use_sim_, can_interface_.c_str(), control_mode_name_.c_str(), speed_control_byte_,
         max_yaw_rate_, max_pitch_rate_);
       return CallbackReturn::SUCCESS;
     } catch (const std::exception& e) {
@@ -209,6 +215,10 @@ private:
     can_interface_ = get_parameter("can_interface").as_string();
     control_mode_name_ = get_parameter("control_mode").as_string();
     control_mode_ = parse_control_mode(control_mode_name_);
+    speed_control_byte_ = static_cast<int>(get_parameter("speed_control_byte").as_int());
+    if (speed_control_byte_ < 0 || speed_control_byte_ > 0xFF) {
+      throw std::invalid_argument("speed_control_byte must be in [0, 255]");
+    }
     enable_command_timeout_ = get_parameter("enable_command_timeout").as_bool();
     command_timeout_sec_ = std::max(0.05, get_parameter("command_timeout_sec").as_double());
     max_yaw_rate_ = std::abs(get_parameter("max_yaw_rate").as_double());
@@ -266,6 +276,7 @@ private:
     if (!gimbal_->init(can_interface_)) {
       throw std::runtime_error("云台接口初始化失败");
     }
+    gimbal_->setSpeedControlByte(static_cast<uint8_t>(speed_control_byte_));
   }
 
   bool is_active_state()
@@ -354,15 +365,44 @@ private:
         send_incremental_position_command(safe_cmd, starting_new_nudge);
         has_active_cmd_ = true;
       } else if (has_active_cmd_) {
-        // The RS2 keeps executing the last timed position target after the
-        // software command returns to hold. Send one explicit current-position
-        // target on the active->hold edge so a released key stops promptly.
+        // Do not send a second absolute target on the stop edge. Feedback is
+        // sampled at 10 Hz and can lag the real mechanism, which caused a
+        // visible reverse twitch whenever motion stopped. The bounded 100 ms
+        // position move is allowed to finish, then software resynchronizes.
         send_position_hold_command();
       } else {
         last_incremental_cmd_time_ = now();
         sync_position_target_to_current();
       }
     }
+  }
+
+  void nudge_callback(const vision_servo_msgs::msg::GimbalNudge::ConstSharedPtr& msg)
+  {
+    if (!is_active_state() || !gimbal_ || msg->command_id == last_nudge_command_id_) {
+      return;
+    }
+
+    const double yaw_delta = std::clamp(
+      static_cast<double>(msg->yaw_delta),
+      -incremental_position_max_step_rad_, incremental_position_max_step_rad_);
+    const double pitch_delta = std::clamp(
+      static_cast<double>(msg->pitch_delta),
+      -incremental_position_max_step_rad_, incremental_position_max_step_rad_);
+    const double duration = std::clamp(
+      static_cast<double>(msg->duration), 0.1, 1.0);
+
+    if (std::abs(yaw_delta) < 1e-6 && std::abs(pitch_delta) < 1e-6) {
+      return;
+    }
+
+    last_nudge_command_id_ = msg->command_id;
+    gimbal_->sendIncrementalPositionCommand(
+      static_cast<float>(yaw_delta),
+      static_cast<float>(pitch_delta),
+      static_cast<float>(duration));
+    last_cmd_time_ = now();
+    has_active_cmd_ = false;
   }
 
   void send_incremental_position_command(
@@ -438,13 +478,6 @@ private:
   {
     last_incremental_cmd_time_ = now();
     sync_position_target_to_current();
-    if (has_position_target_) {
-      gimbal_->sendPositionCommand(
-        static_cast<float>(target_yaw_),
-        static_cast<float>(target_pitch_),
-        static_cast<float>(incremental_position_duration_sec_));
-      last_incremental_send_time_ = last_incremental_cmd_time_;
-    }
     has_active_cmd_ = false;
   }
 
@@ -598,6 +631,7 @@ private:
       state_timer_.reset();
     }
     cmd_sub_.reset();
+    nudge_sub_.reset();
     debug_position_srv_.reset();
     home_srv_.reset();
     joint_state_pub_.reset();
@@ -606,6 +640,7 @@ private:
 
   std::unique_ptr<IGimbalInterface> gimbal_;
   rclcpp::Subscription<vision_servo_msgs::msg::GimbalCmd>::SharedPtr cmd_sub_;
+  rclcpp::Subscription<vision_servo_msgs::msg::GimbalNudge>::SharedPtr nudge_sub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr debug_position_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr home_srv_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
@@ -619,6 +654,7 @@ private:
   rclcpp::Time last_incremental_send_time_{0, 0, RCL_ROS_TIME};
   std::string can_interface_{"can0"};
   std::string control_mode_name_{"incremental_position"};
+  int speed_control_byte_{0x80};
   double latest_yaw_ = 0.0;
   double latest_pitch_ = 0.0;
   double target_yaw_ = 0.0;
@@ -639,6 +675,7 @@ private:
   bool has_active_cmd_ = false;
   bool has_latest_position_ = false;
   bool has_position_target_ = false;
+  uint64_t last_nudge_command_id_ = 0;
 };
 
 }  // namespace robot_platform_pkg

@@ -44,6 +44,9 @@ public:
    */
   virtual bool init(const std::string& can_interface) = 0;
 
+  /// Configure the DJI speed-control byte before sending speed commands.
+  virtual void setSpeedControlByte(uint8_t control_byte) = 0;
+
   /// 向云台发送速度指令（yaw_rate, pitch_rate）
   virtual void sendCommand(const vision_servo_msgs::msg::GimbalCmd& cmd) = 0;
 

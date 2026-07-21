@@ -49,6 +49,10 @@ def generate_launch_description():
             "enable_imu": LaunchConfiguration("enable_imu"),
             "enable_chassis": LaunchConfiguration("enable_chassis"),
             "can_interface": LaunchConfiguration("can_interface"),
+            "gimbal_control_mode": LaunchConfiguration("gimbal_control_mode"),
+            "gimbal_speed_control_byte": LaunchConfiguration(
+                "gimbal_speed_control_byte"
+            ),
         }.items(),
     )
 
@@ -175,6 +179,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "can_interface", default_value="can0",
             description="DJI RS2云台使用的Linux SocketCAN接口；USB-CAN实机可设为can1"),
+        DeclareLaunchArgument(
+            "gimbal_control_mode", default_value="incremental_position",
+            description="云台命令模式：speed 或 incremental_position"),
+        DeclareLaunchArgument(
+            "gimbal_speed_control_byte", default_value="128",
+            description="DJI RS2速度控制字，128代表0x80"),
         DeclareLaunchArgument("controller_plugin",
                               default_value="servo_control_pkg::IBVSController",
                               description="视觉伺服控制器插件类名"),

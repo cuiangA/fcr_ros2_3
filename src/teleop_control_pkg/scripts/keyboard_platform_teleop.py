@@ -10,6 +10,7 @@ deadman is required.
 from __future__ import annotations
 
 import select
+import math
 import sys
 import time
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ from geometry_msgs.msg import TwistStamped
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Empty, String
-from vision_servo_msgs.msg import GimbalCmd
+from vision_servo_msgs.msg import GimbalCmd, GimbalNudge
 
 
 def clamp(value: float, lower: float, upper: float) -> float:
@@ -96,6 +97,9 @@ class KeyboardPlatformTeleop(Node):
         self.declare_parameter("angular_z", 0.15)
         self.declare_parameter("gimbal_yaw_rate", 0.25)
         self.declare_parameter("gimbal_pitch_rate", 0.20)
+        self.declare_parameter("gimbal_yaw_step_deg", 1.5)
+        self.declare_parameter("gimbal_pitch_step_deg", 1.0)
+        self.declare_parameter("gimbal_nudge_duration_sec", 0.1)
         self.declare_parameter("speed_scale", 1.0)
         self.declare_parameter("speed_step", 0.25)
         self.declare_parameter("min_speed_scale", 0.25)
@@ -109,6 +113,15 @@ class KeyboardPlatformTeleop(Node):
         self.angular_z = abs(float(self.get_parameter("angular_z").value))
         self.gimbal_yaw = abs(float(self.get_parameter("gimbal_yaw_rate").value))
         self.gimbal_pitch = abs(float(self.get_parameter("gimbal_pitch_rate").value))
+        self.gimbal_yaw_step = math.radians(
+            abs(float(self.get_parameter("gimbal_yaw_step_deg").value))
+        )
+        self.gimbal_pitch_step = math.radians(
+            abs(float(self.get_parameter("gimbal_pitch_step_deg").value))
+        )
+        self.gimbal_nudge_duration = max(
+            float(self.get_parameter("gimbal_nudge_duration_sec").value), 0.1
+        )
         self.speed_scale = float(self.get_parameter("speed_scale").value)
         self.speed_step = abs(float(self.get_parameter("speed_step").value))
         self.min_scale = max(float(self.get_parameter("min_speed_scale").value), 0.01)
@@ -124,6 +137,9 @@ class KeyboardPlatformTeleop(Node):
         )
         self.velocity_pub = self.create_publisher(TwistStamped, "teleop/cmd_vel", qos)
         self.gimbal_pub = self.create_publisher(GimbalCmd, "teleop/cmd_gimbal", qos)
+        self.gimbal_nudge_pub = self.create_publisher(
+            GimbalNudge, "teleop/gimbal_nudge", qos
+        )
         self.heartbeat_pub = self.create_publisher(Empty, "teleop/heartbeat", qos)
         self.deadman_pub = self.create_publisher(Bool, "teleop/deadman", qos)
         self.estop_pub = self.create_publisher(Bool, "teleop/estop", qos)
@@ -134,6 +150,7 @@ class KeyboardPlatformTeleop(Node):
         self.last_motion_time = self.get_clock().now()
         self.deadman = False
         self.shutdown_requested = False
+        self.gimbal_nudge_id = 0
         self.keyboard: Optional[PosixKeyboardReader] = None
         try:
             self.keyboard = PosixKeyboardReader()
@@ -181,13 +198,21 @@ class KeyboardPlatformTeleop(Node):
         elif key == "e":
             motion = Motion(yaw=-self.angular_z * scale)
         elif key == "UP":
-            motion = Motion(gimbal_pitch=self.gimbal_pitch * scale)
+            self._publish_gimbal_nudge(0.0, self.gimbal_pitch_step * scale)
+            self._activate_deadman()
+            return
         elif key == "DOWN":
-            motion = Motion(gimbal_pitch=-self.gimbal_pitch * scale)
+            self._publish_gimbal_nudge(0.0, -self.gimbal_pitch_step * scale)
+            self._activate_deadman()
+            return
         elif key == "LEFT":
-            motion = Motion(gimbal_yaw=self.gimbal_yaw * scale)
+            self._publish_gimbal_nudge(self.gimbal_yaw_step * scale, 0.0)
+            self._activate_deadman()
+            return
         elif key == "RIGHT":
-            motion = Motion(gimbal_yaw=-self.gimbal_yaw * scale)
+            self._publish_gimbal_nudge(-self.gimbal_yaw_step * scale, 0.0)
+            self._activate_deadman()
+            return
         elif key == " ":
             self._stop(repeat=2)
             return
@@ -228,6 +253,22 @@ class KeyboardPlatformTeleop(Node):
             self.motion = motion
             self.deadman = True
             self.last_motion_time = self.get_clock().now()
+
+    def _activate_deadman(self) -> None:
+        self.motion = Motion()
+        self.deadman = True
+        self.last_motion_time = self.get_clock().now()
+
+    def _publish_gimbal_nudge(self, yaw_delta: float, pitch_delta: float) -> None:
+        self.gimbal_nudge_id += 1
+        nudge = GimbalNudge()
+        nudge.header.stamp = self.get_clock().now().to_msg()
+        nudge.header.frame_id = self.frame_id
+        nudge.command_id = self.gimbal_nudge_id
+        nudge.yaw_delta = float(yaw_delta)
+        nudge.pitch_delta = float(pitch_delta)
+        nudge.duration = float(self.gimbal_nudge_duration)
+        self.gimbal_nudge_pub.publish(nudge)
 
     def _publish_motion(self) -> None:
         stamp = self.get_clock().now().to_msg()

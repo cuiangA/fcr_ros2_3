@@ -31,6 +31,8 @@ def generate_launch_description():
     enable_imu = LaunchConfiguration("enable_imu")
     enable_chassis = LaunchConfiguration("enable_chassis")
     can_interface = LaunchConfiguration("can_interface")
+    gimbal_control_mode = LaunchConfiguration("gimbal_control_mode")
+    gimbal_speed_control_byte = LaunchConfiguration("gimbal_speed_control_byte")
 
     # 配置文件目录
     config_dir = PathJoinSubstitution([
@@ -58,6 +60,8 @@ def generate_launch_description():
                     {
                         "use_sim": use_sim,
                         "can_interface": can_interface,
+                        "control_mode": gimbal_control_mode,
+                        "speed_control_byte": gimbal_speed_control_byte,
                     }],
     )
 
@@ -102,5 +106,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "can_interface", default_value="can0",
             description="DJI RS2云台使用的Linux SocketCAN接口"),
+        DeclareLaunchArgument(
+            "gimbal_control_mode", default_value="incremental_position",
+            description="云台命令模式：speed 或 incremental_position"),
+        DeclareLaunchArgument(
+            "gimbal_speed_control_byte", default_value="128",
+            description="DJI RS2速度控制字，128代表0x80"),
         chassis_node, gimbal_node, imu_node, odom_node, platform_mgr,
     ])

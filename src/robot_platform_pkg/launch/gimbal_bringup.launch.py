@@ -20,6 +20,7 @@ def generate_launch_description():
     can_interface = LaunchConfiguration("can_interface")
     autostart = LaunchConfiguration("autostart")
     control_mode = LaunchConfiguration("control_mode")
+    speed_control_byte = LaunchConfiguration("speed_control_byte")
 
     config_dir = PathJoinSubstitution([
         FindPackageShare("robot_platform_pkg"),
@@ -38,6 +39,7 @@ def generate_launch_description():
                 "use_sim": use_sim,
                 "can_interface": can_interface,
                 "control_mode": control_mode,
+                "speed_control_byte": speed_control_byte,
             },
         ],
     )
@@ -62,6 +64,11 @@ def generate_launch_description():
             "control_mode",
             default_value="incremental_position",
             description="Gimbal command mode: speed or feedback-based incremental_position.",
+        ),
+        DeclareLaunchArgument(
+            "speed_control_byte",
+            default_value="128",
+            description="DJI RS2 speed-control byte as integer (128 = 0x80).",
         ),
         gimbal_node,
     ])

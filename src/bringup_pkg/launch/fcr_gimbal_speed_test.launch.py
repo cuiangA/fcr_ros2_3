@@ -1,4 +1,4 @@
-"""Minimal real-hardware manual test: can1 gimbal driver plus command mux."""
+"""Isolated real-RS2 speed test: no command mux, camera, servo, or chassis."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -16,22 +16,17 @@ def generate_launch_description():
         launch_arguments={
             "use_sim": "false",
             "can_interface": LaunchConfiguration("can_interface"),
-            "control_mode": LaunchConfiguration("control_mode"),
+            "control_mode": "speed",
             "speed_control_byte": LaunchConfiguration("speed_control_byte"),
         }.items(),
     )
-    mux = IncludeLaunchDescription(
-        PathJoinSubstitution([
-            FindPackageShare("teleop_control_pkg"),
-            "launch",
-            "remote_control.launch.py",
-        ]),
-        launch_arguments={"start_keyboard": "false"}.items(),
-    )
+
     return LaunchDescription([
         DeclareLaunchArgument("can_interface", default_value="can1"),
-        DeclareLaunchArgument("control_mode", default_value="incremental_position"),
-        DeclareLaunchArgument("speed_control_byte", default_value="128"),
+        DeclareLaunchArgument(
+            "speed_control_byte",
+            default_value="128",
+            description="DJI RS2 speed-control byte (128 = 0x80).",
+        ),
         gimbal,
-        mux,
     ])

@@ -6,6 +6,7 @@
 #include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
+#include <vision_servo_msgs/msg/gimbal_nudge.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -36,6 +37,10 @@ public:
     publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 50.0);
     max_gimbal_yaw_rate_ = declare_parameter<double>("max_gimbal_yaw_rate", 0.25);
     max_gimbal_pitch_rate_ = declare_parameter<double>("max_gimbal_pitch_rate", 0.20);
+    max_gimbal_yaw_nudge_rad_ = declare_parameter<double>(
+      "max_gimbal_yaw_nudge_rad", 0.0523598776);
+    max_gimbal_pitch_nudge_rad_ = declare_parameter<double>(
+      "max_gimbal_pitch_nudge_rad", 0.0349065850);
     frame_id_ = declare_parameter<std::string>("frame_id", "base_link");
     const auto default_mode = declare_parameter<std::string>("default_mode", "manual");
     if (publish_rate_hz_ <= 0.0 || max_gimbal_yaw_rate_ <= 0.0 ||
@@ -53,6 +58,8 @@ public:
       "cmd_vel", command_qos);
     final_gimbal_pub_ = create_publisher<vision_servo_msgs::msg::GimbalCmd>(
       "cmd_gimbal", command_qos);
+    final_gimbal_nudge_pub_ = create_publisher<vision_servo_msgs::msg::GimbalNudge>(
+      "cmd_gimbal_nudge", command_qos);
     status_pub_ = create_publisher<std_msgs::msg::String>(
       "remote_control/status", rclcpp::QoS(10).reliable());
 
@@ -71,6 +78,21 @@ public:
       [this](vision_servo_msgs::msg::GimbalCmd::ConstSharedPtr msg) {
         manual_gimbal_ = clamp_gimbal(*msg);
         manual_gimbal_time_ms_ = steady_now_ms();
+      });
+    manual_gimbal_nudge_sub_ = create_subscription<vision_servo_msgs::msg::GimbalNudge>(
+      "teleop/gimbal_nudge", command_qos,
+      [this](vision_servo_msgs::msg::GimbalNudge::ConstSharedPtr msg) {
+        pending_gimbal_nudge_ = *msg;
+        pending_gimbal_nudge_.yaw_delta = static_cast<float>(std::clamp(
+          static_cast<double>(msg->yaw_delta),
+          -max_gimbal_yaw_nudge_rad_, max_gimbal_yaw_nudge_rad_));
+        pending_gimbal_nudge_.pitch_delta = static_cast<float>(std::clamp(
+          static_cast<double>(msg->pitch_delta),
+          -max_gimbal_pitch_nudge_rad_, max_gimbal_pitch_nudge_rad_));
+        pending_gimbal_nudge_.duration = static_cast<float>(std::clamp(
+          static_cast<double>(msg->duration), 0.1, 1.0));
+        pending_gimbal_nudge_time_ms_ = steady_now_ms();
+        has_pending_gimbal_nudge_ = true;
       });
     auto_gimbal_sub_ = create_subscription<vision_servo_msgs::msg::GimbalCmd>(
       "auto/cmd_gimbal", command_qos,
@@ -200,6 +222,17 @@ private:
     final_velocity_pub_->publish(velocity);
     final_gimbal_pub_->publish(selected_gimbal(decision.source, now_ms));
 
+    if (has_pending_gimbal_nudge_) {
+      const auto nudge_age_ms = now_ms - pending_gimbal_nudge_time_ms_;
+      if (nudge_age_ms > command_timeout_ms_) {
+        has_pending_gimbal_nudge_ = false;
+      } else if (decision.source == CommandSource::kManual) {
+        pending_gimbal_nudge_.header.stamp = now();
+        final_gimbal_nudge_pub_->publish(pending_gimbal_nudge_);
+        has_pending_gimbal_nudge_ = false;
+      }
+    }
+
     std_msgs::msg::String status;
     std::ostringstream stream;
     stream << "{\"mode\":\"" << to_string(core_->mode())
@@ -234,20 +267,29 @@ private:
   double publish_rate_hz_{50.0};
   double max_gimbal_yaw_rate_{0.25};
   double max_gimbal_pitch_rate_{0.20};
+  double max_gimbal_yaw_nudge_rad_{0.0523598776};
+  double max_gimbal_pitch_nudge_rad_{0.0349065850};
   int64_t command_timeout_ms_{200};
   std::string frame_id_{"base_link"};
   int64_t manual_gimbal_time_ms_{-1000000};
   int64_t auto_gimbal_time_ms_{-1000000};
   vision_servo_msgs::msg::GimbalCmd manual_gimbal_;
   vision_servo_msgs::msg::GimbalCmd auto_gimbal_;
+  vision_servo_msgs::msg::GimbalNudge pending_gimbal_nudge_;
+  int64_t pending_gimbal_nudge_time_ms_{-1000000};
+  bool has_pending_gimbal_nudge_{false};
   std::chrono::steady_clock::time_point last_tick_;
 
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr final_velocity_pub_;
   rclcpp::Publisher<vision_servo_msgs::msg::GimbalCmd>::SharedPtr final_gimbal_pub_;
+  rclcpp::Publisher<vision_servo_msgs::msg::GimbalNudge>::SharedPtr
+    final_gimbal_nudge_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr manual_velocity_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr auto_velocity_sub_;
   rclcpp::Subscription<vision_servo_msgs::msg::GimbalCmd>::SharedPtr manual_gimbal_sub_;
+  rclcpp::Subscription<vision_servo_msgs::msg::GimbalNudge>::SharedPtr
+    manual_gimbal_nudge_sub_;
   rclcpp::Subscription<vision_servo_msgs::msg::GimbalCmd>::SharedPtr auto_gimbal_sub_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr heartbeat_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr deadman_sub_;

@@ -98,6 +98,10 @@ public:
     return true;
   }
 
+  void setSpeedControlByte(uint8_t control_byte) override {
+    speed_ctrl_byte_ = control_byte;
+  }
+
   void sendCommand(const vision_servo_msgs::msg::GimbalCmd& cmd) override {
     if (!connected_) return;
 
@@ -496,6 +500,10 @@ public:
     last_update_ = Clock::now();
     std::cout << "[SimGimbal] 初始化（仿真模式）" << std::endl;
     return true;
+  }
+
+  void setSpeedControlByte(uint8_t control_byte) override {
+    (void)control_byte;
   }
 
   void sendCommand(const vision_servo_msgs::msg::GimbalCmd& cmd) override {

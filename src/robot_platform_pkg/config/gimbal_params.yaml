@@ -16,6 +16,8 @@ gimbal_driver:
     status_publish_rate_hz: 10.0
     stop_command_burst_count: 3
     control_mode: "incremental_position"  # 将 rate 积分为绝对目标，使用 RS2 已验证的绝对位置帧执行
+    # DJI速度控制字。参考RS2控制器使用0x80；保留为参数便于真机回退对比。
+    speed_control_byte: 128
     incremental_position_duration_sec: 0.1    # 每个位置目标指令的执行时间，最小 0.1s
     incremental_position_max_step_deg: 2.0    # 单次增量最大角度，防止低频/卡顿时跳变过大
     # 首次点按按100ms固定步长换算，避免单个20ms采样小到落入机械死区。
