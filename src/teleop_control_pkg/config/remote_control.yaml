@@ -30,8 +30,8 @@ keyboard_platform_teleop:
     # At a 100 ms lease these produce about 1.4 deg yaw / 1.1 deg pitch per tap.
     gimbal_yaw_rate: 0.25
     gimbal_pitch_rate: 0.20
-    gimbal_yaw_step_deg: 1.5
-    gimbal_pitch_step_deg: 1.0
+    gimbal_yaw_step_deg: 3.0
+    gimbal_pitch_step_deg: 2.0
     gimbal_nudge_duration_sec: 0.1
     speed_scale: 1.0
     speed_step: 0.25

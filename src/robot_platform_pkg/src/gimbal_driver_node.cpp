@@ -53,7 +53,7 @@ public:
     declare_parameter("control_mode", "incremental_position");
     declare_parameter("speed_control_byte", 0x80);
     declare_parameter("incremental_position_duration_sec", 0.1);
-    declare_parameter("incremental_position_max_step_deg", 2.0);
+    declare_parameter("incremental_position_max_step_deg", 3.0);
     declare_parameter("incremental_position_default_dt_sec", 0.1);
     declare_parameter("incremental_position_max_dt_sec", 0.1);
     declare_parameter("incremental_position_send_period_sec", 0.1);
@@ -664,7 +664,7 @@ private:
   double max_pitch_rate_ = 1.0;
   double status_publish_period_sec_ = 0.1;
   double incremental_position_duration_sec_ = 0.1;
-  double incremental_position_max_step_rad_ = 2.0 * M_PI / 180.0;
+  double incremental_position_max_step_rad_ = 3.0 * M_PI / 180.0;
   double incremental_position_default_dt_sec_ = 0.1;
   double incremental_position_max_dt_sec_ = 0.1;
   double incremental_position_send_period_sec_ = 0.1;
