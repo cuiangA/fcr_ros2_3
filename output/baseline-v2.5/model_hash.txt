@@ -1,0 +1,7 @@
+# Baseline ONNX model hash (verified on development machine)
+# sha256sum ~/fcr_ros2_3/src/perception_pkg/models/yolov8n.onnx
+e374e187b211da8b9db2a0863ceac5ff11d903cbf59a36e32b34aa8d178f527b  yolov8n.onnx
+
+# TensorRT engine hash (TODO: fill in on Jetson)
+# Run: sha256sum $HOME/fcr_models/yolov8n_fp16.engine
+# TODO: <sha256>  yolov8n_fp16.engine
