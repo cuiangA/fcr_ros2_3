@@ -222,10 +222,16 @@ private:
     auto frame = dji_rs2::build_position_command(
       yaw_tenth, 0, pitch_tenth, time_ms, ctrl_byte);
     sendFrame(frame);
-    std::cout << "[DJIRS2Gimbal] " << label << "指令已发送 yaw=" << yaw_tenth
-              << " pitch=" << pitch_tenth << " time_ms=" << time_ms
-              << " ctrl=0x" << std::hex << static_cast<int>(ctrl_byte)
-              << std::dec << std::endl;
+    // Do not print every control frame: at 50 Hz synchronous terminal output
+    // adds measurable jitter to the command path. Keep a 1 Hz diagnostic.
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_position_log_time_ >= std::chrono::seconds(1)) {
+      last_position_log_time_ = now;
+      std::cout << "[DJIRS2Gimbal] " << label << "指令 yaw=" << yaw_tenth
+                << " pitch=" << pitch_tenth << " time_ms=" << time_ms
+                << " ctrl=0x" << std::hex << static_cast<int>(ctrl_byte)
+                << std::dec << std::endl;
+    }
   }
 
   static int normalizeTenthDegDelta(int current, int previous) {
@@ -463,6 +469,7 @@ private:
   uint8_t position_ctrl_byte_;    ///< 位置控制标志
   uint8_t speed_ctrl_byte_;       ///< 速度控制标志
   std::chrono::steady_clock::time_point last_query_time_{};
+  std::chrono::steady_clock::time_point last_position_log_time_{};
 
   // 缓存的云台状态 (0.1° 单位)
   mutable std::mutex state_mutex_;

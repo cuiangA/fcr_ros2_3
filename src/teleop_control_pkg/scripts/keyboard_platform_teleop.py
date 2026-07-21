@@ -89,13 +89,13 @@ class PosixKeyboardReader:
 class KeyboardPlatformTeleop(Node):
     def __init__(self) -> None:
         super().__init__("keyboard_platform_teleop")
-        self.declare_parameter("publish_rate_hz", 20.0)
-        self.declare_parameter("key_timeout_sec", 0.25)
+        self.declare_parameter("publish_rate_hz", 50.0)
+        self.declare_parameter("key_timeout_sec", 0.10)
         self.declare_parameter("linear_x", 0.03)
         self.declare_parameter("linear_y", 0.03)
         self.declare_parameter("angular_z", 0.15)
-        self.declare_parameter("gimbal_yaw_rate", 0.15)
-        self.declare_parameter("gimbal_pitch_rate", 0.12)
+        self.declare_parameter("gimbal_yaw_rate", 0.25)
+        self.declare_parameter("gimbal_pitch_rate", 0.20)
         self.declare_parameter("speed_scale", 1.0)
         self.declare_parameter("speed_step", 0.25)
         self.declare_parameter("min_speed_scale", 0.25)

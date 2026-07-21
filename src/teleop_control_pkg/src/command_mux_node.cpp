@@ -33,7 +33,7 @@ public:
     config.max_accel_x = declare_parameter<double>("max_accel_x", 0.15);
     config.max_accel_y = declare_parameter<double>("max_accel_y", 0.15);
     config.max_accel_yaw = declare_parameter<double>("max_accel_yaw", 0.50);
-    publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 20.0);
+    publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 50.0);
     max_gimbal_yaw_rate_ = declare_parameter<double>("max_gimbal_yaw_rate", 0.25);
     max_gimbal_pitch_rate_ = declare_parameter<double>("max_gimbal_pitch_rate", 0.20);
     frame_id_ = declare_parameter<std::string>("frame_id", "base_link");
@@ -231,7 +231,7 @@ private:
   }
 
   std::unique_ptr<CommandMuxCore> core_;
-  double publish_rate_hz_{20.0};
+  double publish_rate_hz_{50.0};
   double max_gimbal_yaw_rate_{0.25};
   double max_gimbal_pitch_rate_{0.20};
   int64_t command_timeout_ms_{200};

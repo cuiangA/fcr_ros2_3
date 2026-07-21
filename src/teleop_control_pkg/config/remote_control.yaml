@@ -1,10 +1,11 @@
 command_mux:
   ros__parameters:
     default_mode: "manual"
-    publish_rate_hz: 20.0
+    # 50 Hz cuts one arbitration cycle from 50 ms to 20 ms.
+    publish_rate_hz: 50.0
     heartbeat_timeout_ms: 250
-    command_timeout_ms: 200
-    zero_dwell_ms: 200
+    command_timeout_ms: 150
+    zero_dwell_ms: 100
     max_linear_x: 0.05
     max_linear_y: 0.05
     max_angular_z: 0.25
@@ -17,13 +18,16 @@ command_mux:
 
 keyboard_platform_teleop:
   ros__parameters:
-    publish_rate_hz: 20.0
-    key_timeout_sec: 0.25
+    # A terminal has no key-release event. Keep a short lease so a tap stops
+    # promptly, while still allowing normal OS key repeat for continuous motion.
+    publish_rate_hz: 50.0
+    key_timeout_sec: 0.10
     linear_x: 0.03
     linear_y: 0.03
     angular_z: 0.15
-    gimbal_yaw_rate: 0.15
-    gimbal_pitch_rate: 0.12
+    # At a 100 ms lease these produce about 1.4 deg yaw / 1.1 deg pitch per tap.
+    gimbal_yaw_rate: 0.25
+    gimbal_pitch_rate: 0.20
     speed_scale: 1.0
     speed_step: 0.25
     min_speed_scale: 0.25

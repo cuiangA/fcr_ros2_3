@@ -338,24 +338,30 @@ private:
 
     last_cmd_time_ = now();
     auto safe_cmd = clamp_command(*msg);
-    has_active_cmd_ = !safe_cmd.hold_yaw || !safe_cmd.hold_pitch;
+    const bool next_active_cmd = !safe_cmd.hold_yaw || !safe_cmd.hold_pitch;
 
     if (control_mode_ == ControlMode::Speed) {
       gimbal_->sendCommand(safe_cmd);
+      has_active_cmd_ = next_active_cmd;
     } else {
-      send_incremental_position_command(safe_cmd);
+      if (next_active_cmd) {
+        send_incremental_position_command(safe_cmd);
+        has_active_cmd_ = true;
+      } else if (has_active_cmd_) {
+        // The RS2 keeps executing the last timed position target after the
+        // software command returns to hold. Send one explicit current-position
+        // target on the active->hold edge so a released key stops promptly.
+        send_position_hold_command();
+      } else {
+        last_incremental_cmd_time_ = now();
+        sync_position_target_to_current();
+      }
     }
   }
 
   void send_incremental_position_command(const vision_servo_msgs::msg::GimbalCmd& cmd)
   {
     const auto now_time = now();
-
-    if (cmd.hold_yaw && cmd.hold_pitch) {
-      last_incremental_cmd_time_ = now_time;
-      sync_position_target_to_current();
-      return;
-    }
 
     double dt = incremental_position_default_dt_sec_;
     if (last_incremental_cmd_time_.nanoseconds() > 0) {
@@ -408,6 +414,19 @@ private:
     target_yaw_ = latest_yaw_;
     target_pitch_ = latest_pitch_;
     has_position_target_ = true;
+  }
+
+  void send_position_hold_command()
+  {
+    last_incremental_cmd_time_ = now();
+    sync_position_target_to_current();
+    if (has_position_target_) {
+      gimbal_->sendPositionCommand(
+        static_cast<float>(target_yaw_),
+        static_cast<float>(target_pitch_),
+        static_cast<float>(incremental_position_duration_sec_));
+    }
+    has_active_cmd_ = false;
   }
 
   /// 状态读取回调（100 Hz） — 从云台读取角度和角速度。
@@ -516,9 +535,7 @@ private:
     }
 
     if (control_mode_ == ControlMode::IncrementalPosition) {
-      last_incremental_cmd_time_ = now();
-      sync_position_target_to_current();
-      has_active_cmd_ = false;
+      send_position_hold_command();
       return;
     }
 
