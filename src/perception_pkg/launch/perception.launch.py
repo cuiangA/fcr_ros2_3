@@ -62,6 +62,12 @@ def generate_launch_description():
         DeclareLaunchArgument("detections_topic", default_value="/perception/detections"),
         DeclareLaunchArgument("tracks_topic", default_value="/perception/tracks"),
         DeclareLaunchArgument("debug_image_topic", default_value="/perception/debug_image"),
+        DeclareLaunchArgument(
+            "enable_face_aim",
+            default_value="true",
+            description="Enable face_aim_node (aim target from tracks)",
+        ),
+        DeclareLaunchArgument("aim_target_topic", default_value="/perception/aim_target_2d"),
     ]
 
     detection_node = Node(
@@ -112,4 +118,18 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("enable_tracking")),
     )
 
-    return LaunchDescription(arguments + [detection_node, tracking_node])
+    face_aim_node = Node(
+        package="perception_pkg",
+        executable="face_aim_node",
+        name="face_aim_node",
+        output="screen",
+        parameters=[{"use_sim_time": ParameterValue(use_sim_time, value_type=bool)}],
+        remappings=[
+            ("/sony/image_raw", LaunchConfiguration("sony_image_topic")),
+            ("/perception/tracks", LaunchConfiguration("tracks_topic")),
+            ("/perception/aim_target_2d", LaunchConfiguration("aim_target_topic")),
+        ],
+        condition=IfCondition(LaunchConfiguration("enable_face_aim")),
+    )
+
+    return LaunchDescription(arguments + [detection_node, tracking_node, face_aim_node])

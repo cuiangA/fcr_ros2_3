@@ -135,10 +135,17 @@ if(PERCEPTION_BUILD_LEGACY_FUSION)
     RUNTIME DESTINATION bin)
 endif()
 
+add_executable(face_aim_node src/face_aim_node.cpp)
+target_include_directories(face_aim_node PRIVATE include ${OpenCV_INCLUDE_DIRS})
+ament_target_dependencies(face_aim_node
+  rclcpp sensor_msgs vision_servo_msgs cv_bridge image_transport)
+target_link_libraries(face_aim_node perception_qos ${OpenCV_LIBS})
+
 install(TARGETS
   yolo_processing
   detection_node
   tracking_node
+  face_aim_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})
