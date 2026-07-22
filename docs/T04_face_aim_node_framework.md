@@ -172,9 +172,13 @@ install(TARGETS
   ...
 ```
 
-### Step 4: （可选）集成到 `perception.launch.py`
+### Step 4: 集成到 `perception.launch.py`
 
-在 launch 文件中增加新节点：
+**文件**: `src/perception_pkg/launch/perception.launch.py`
+
+新增启动参数 `enable_face_aim`（默认 `true`）和 `aim_target_topic`（默认 `/perception/aim_target_2d`）。
+
+在 `detection_node` 和 `tracking_node` 之后添加 `face_aim_node`：
 
 ```python
 face_aim_node = Node(
@@ -182,13 +186,17 @@ face_aim_node = Node(
     executable="face_aim_node",
     name="face_aim_node",
     output="screen",
+    parameters=[{"use_sim_time": ParameterValue(use_sim_time, value_type=bool)}],
     remappings=[
-        ("image", LaunchConfiguration("sony_image_topic")),
-        ("tracks", LaunchConfiguration("tracks_topic")),
-        ("aim_target", "/perception/aim_target_2d"),
+        ("/sony/image_raw", LaunchConfiguration("sony_image_topic")),
+        ("/perception/tracks", LaunchConfiguration("tracks_topic")),
+        ("/perception/aim_target_2d", LaunchConfiguration("aim_target_topic")),
     ],
+    condition=IfCondition(LaunchConfiguration("enable_face_aim")),
 )
 ```
+
+> 注意：`face_aim_node` 内部使用绝对话题名，通过 remapping 映射到 launch 配置的值，确保与 `sony_image_topic`/`tracks_topic` 参数同步。
 
 ---
 
@@ -287,28 +295,74 @@ valid: true
 
 ### 4. 测试场景矩阵
 
-| # | 场景 | 操作 | 预期 |
-|---|------|------|------|
-| 1 | 正常匹配 | image 和 tracks 的 stamp 一致 | `valid=true`, pixel 为 bbox center |
-| 2 | 无跟踪目标 | `tracking_id=-1` | `valid=false` |
-| 3 | tracking_id 不在 targets 中 | 发布不存在的 ID | `valid=false` |
-| 4 | 非 person 目标 | `class_name != "person"` | `valid=false` |
-| 5 | 输入超时 | 停止发布数据 >2s | `valid=false` |
-| 6 | 时间戳不匹配 | image 和 tracks stamp 不一致 | 等待，不输出 |
-| 7 | 恢复匹配 | 不匹配后发送正确配对 | 恢复正常 `valid=true` |
-| 8 | 调试图无订阅者 | 不启动 debug topic echo | 无 debug 图发布（日志可确认） |
-| 9 | 调试图有订阅者 | `ros2 topic echo /perception/face_aim_debug` | debug 图正常发布 |
+| # | 场景 | 操作 | 预期 | 状态 |
+|---|------|------|------|------|
+| 1 | 正常匹配 | image 和 tracks 的 stamp 一致 | `valid=true`, pixel 为 bbox center | ✅ 通过 |
+| 2 | 无跟踪目标 | `tracking_id=-1` | `valid=false` | ✅ 通过 |
+| 3 | tracking_id 不在 targets 中 | 发布不存在的 ID | `valid=false` | ✅ 通过 |
+| 4 | 非 person 目标 | `class_name != "person"` | `valid=false` | ✅ 通过 |
+| 5 | 输入超时 | 停止发布数据 >2s | `valid=false` | ✅ 通过 |
+| 6 | 时间戳不匹配 | image 和 tracks stamp 不一致 | 等待，不输出 | ✅ 通过 |
+| 7 | 恢复匹配 | 不匹配后发送正确配对 | 恢复正常 `valid=true` | ✅ 通过 |
+| 8 | 调试图无订阅者 | 不启动 debug topic echo | 无 debug 图发布 | ✅ 通过 |
+| 9 | 调试图有订阅者 | `ros2 topic echo /perception/face_aim_debug` | debug 图正常发布 | ⏳ 待测 |
 
 ### 5. 集成测试（结合实际管线）
 
-启动完整感知管线并加入 face_aim_node：
+face_aim_node 已集成到 `perception.launch.py`，通过 `enable_face_aim:=true`（默认）启动：
 
 ```bash
+# 启动完整感知管线（含 face_aim_node）
 ros2 launch perception_pkg perception.launch.py
-# 另一终端
-ros2 run perception_pkg face_aim_node
+
 # 观察瞄准目标
-ros2 topic echo /perception/aim_target_2d
+ros2 topic echo /perception/aim_target_2d vision_servo_msgs/msg/AimTarget2D --csv
+```
+
+也可单独启动：
+```bash
+ros2 launch perception_pkg perception.launch.py enable_detection:=false enable_tracking:=false
+ros2 run perception_pkg face_aim_node
+```
+
+#### 集成测试结果（2026-07-22）
+
+| 验证项 | 结果 |
+|--------|------|
+| `perception.launch.py` 语法解析 | ✅ |
+| 三个节点正常启动 | ✅ detection + tracking + face_aim |
+| 所有预期话题已创建 | ✅ `/sony/image_raw`, `/perception/detections`, `/perception/tracks`, `/perception/aim_target_2d`, `/face_aim_debug` |
+| face_aim_node 接收手动发布数据 | ✅ 输出 `valid=true, source=UPPER_BODY` |
+| 集成数据流（video_pub → face_aim） | ✅ 时间戳匹配正确 |
+| 完整管线端到端（detection→tracking→face_aim） | ⏳ 需 GPU 环境（CPU YOLO 推理 < 1 fps） |
+
+**验证步骤**（无相机时使用 video_publisher + 手动发布 tracks）：
+
+```bash
+# 终端 1：启动管线
+ros2 launch perception_pkg perception.launch.py \
+  enable_detection:=false enable_tracking:=false
+
+# 终端 2：发布 match 的 image + tracks（stamp 必须一致）
+ros2 topic pub --once /sony/image_raw sensor_msgs/msg/Image \
+  '{header: {stamp: {sec: 100, nanosec: 0}, frame_id: "sony_optical_frame"},
+    height: 480, width: 640, encoding: "bgr8", is_bigendian: false, step: 1920, data: []}'
+ros2 topic pub --once /perception/tracks vision_servo_msgs/msg/TargetArray \
+  '{header: {stamp: {sec: 100, nanosec: 0}, frame_id: "sony_optical_frame"},
+    targets: [{id: 1, class_name: "person", confidence: 0.9,
+               center: [320.0, 240.0], bbox: [200.0, 150.0, 440.0, 330.0],
+               tracking_state: 2, visible: true, height: 180, width: 240}],
+    tracking_id: 1}'
+
+# 终端 3：观察
+ros2 topic echo /perception/aim_target_2d vision_servo_msgs/msg/AimTarget2D --csv
+```
+
+预期 CSV 输出：
+```
+<timeout_stamp>,-1,0.0,0.0,0.0,4,False
+100,0,sony_optical_frame,1,320.0,240.0,0.9,3,True
+<timeout_stamp>,-1,0.0,0.0,0.0,4,False
 ```
 
 ### 6. 性能影响测试
@@ -335,17 +389,17 @@ ros2 topic hz /perception/tracks
 
 ## 验收清单
 
-| # | 项 | 标准 |
-|---|-----|------|
-| 1 | 编译 | `colcon build` 无警告/错误 |
-| 2 | 空载运行 | 节点启动后无崩溃，超时发 `valid=false` |
-| 3 | 正常匹配 | 匹配的 image+tracks → 正确的 AimTarget2D |
-| 4 | 仅处理 person | 非 person 目标不产生输出 |
-| 5 | 有界缓存 | 内存不随时间增长（`ps aux` 监控 RSS） |
-| 6 | 调试图开关 | 无订阅者时不发布 debug 图 |
-| 7 | 超时检测 | 超时后发送 `valid=false` |
-| 8 | 性能影响 | `ros2 topic hz /perception/tracks` 下降 < 2 FPS |
-| 9 | 不依赖人脸模型 | 用 bbox center 回退稳定运行 |
+| # | 项 | 标准 | 状态 |
+|---|-----|------|------|
+| 1 | 编译 | `colcon build` 无警告/错误 | ✅ |
+| 2 | 空载运行 | 节点启动后无崩溃，超时发 `valid=false` | ✅ |
+| 3 | 正常匹配 | 匹配的 image+tracks → 正确的 AimTarget2D | ✅ |
+| 4 | 仅处理 person | 非 person 目标不产生输出 | ✅ |
+| 5 | 有界缓存 | 内存不随时间增长（`ps aux` 监控 RSS） | ✅ |
+| 6 | 调试图开关 | 无订阅者时不发布 debug 图 | ✅ |
+| 7 | 超时检测 | 超时后发送 `valid=false` | ✅ |
+| 8 | 性能影响 | `ros2 topic hz /perception/tracks` 下降 < 2 FPS | ⏳ 待 GPU 环境 |
+| 9 | 不依赖人脸模型 | 用 bbox center 回退稳定运行 | ✅ |
 
 ---
 
