@@ -305,7 +305,7 @@ valid: true
 | 6 | 时间戳不匹配 | image 和 tracks stamp 不一致 | 等待，不输出 | ✅ 通过 |
 | 7 | 恢复匹配 | 不匹配后发送正确配对 | 恢复正常 `valid=true` | ✅ 通过 |
 | 8 | 调试图无订阅者 | 不启动 debug topic echo | 无 debug 图发布 | ✅ 通过 |
-| 9 | 调试图有订阅者 | `ros2 topic echo /perception/face_aim_debug` | debug 图正常发布 | ⏳ 待测 |
+| 9 | 调试图有订阅者 | `ros2 topic echo /perception/face_aim_debug` | debug 图正常发布 | ✅ 通过 |
 
 ### 5. 集成测试（结合实际管线）
 
@@ -333,6 +333,8 @@ ros2 run perception_pkg face_aim_node
 | 三个节点正常启动 | ✅ detection + tracking + face_aim |
 | 所有预期话题已创建 | ✅ `/sony/image_raw`, `/perception/detections`, `/perception/tracks`, `/perception/aim_target_2d`, `/face_aim_debug` |
 | face_aim_node 接收手动发布数据 | ✅ 输出 `valid=true, source=UPPER_BODY` |
+| 调试图有订阅者时正常发布 | ✅ `ros2 topic echo /face_aim_debug` 成功接收 |
+| 调试图无订阅者时不发布 | ✅ `Subscription count: 0` 时无消息 |
 | 集成数据流（video_pub → face_aim） | ✅ 时间戳匹配正确 |
 | 完整管线端到端（detection→tracking→face_aim） | ⏳ 需 GPU 环境（CPU YOLO 推理 < 1 fps） |
 
@@ -408,3 +410,4 @@ ros2 topic hz /perception/tracks
 - 当前使用 `UPPER_BODY` 作为 source 类型（bbox center 近似上半身中心），未来接入人脸模型后改为 `FACE`
 - 时间戳匹配采用 1ms 容忍窗口，若管线存在大于 1ms 的时间戳抖动，需调整 `max_tolerance_ns_` 参数
 - 节点不缓存历史帧，仅依赖最新待处理帧
+- 调试图像发布时，若图像数据为空则使用空白画布替代（`cv::Mat::zeros`），确保空图像场景下不崩溃
