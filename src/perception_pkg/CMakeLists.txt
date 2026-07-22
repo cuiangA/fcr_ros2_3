@@ -154,6 +154,7 @@ install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES models/README.md models/manifest.json DESTINATION share/${PROJECT_NAME}/models)
 install(PROGRAMS
   scripts/download_model.py
+  scripts/video_publisher.py
   scripts/check_perception.sh
   scripts/jetson_build_perception.sh
   scripts/jetson_acceptance.sh

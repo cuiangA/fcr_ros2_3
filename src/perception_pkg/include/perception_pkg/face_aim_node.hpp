@@ -50,6 +50,13 @@ private:
   int64_t max_tolerance_ns_ = 1'000'000;
   bool publish_debug_ = true;
   bool was_in_timeout_ = false;
+
+  double aim_offset_ratio_ = 0.20;
+  double lpf_alpha_ = 0.40;
+  float filtered_x_ = 0.0f;
+  float filtered_y_ = 0.0f;
+  bool filter_initialized_ = false;
+  int last_tracking_id_ = -1;
 };
 
 }  // namespace perception_pkg

@@ -18,10 +18,14 @@ FaceAimNode::FaceAimNode(const rclcpp::NodeOptions& options)
   declare_parameter("input_timeout_seconds", 2.0);
   declare_parameter("max_tolerance_ns", 1'000'000);
   declare_parameter("publish_debug", true);
+  declare_parameter("aim_offset_ratio", 0.20);
+  declare_parameter("lpf_alpha", 0.40);
 
   input_timeout_seconds_ = get_parameter("input_timeout_seconds").as_double();
   max_tolerance_ns_ = get_parameter("max_tolerance_ns").as_int();
   publish_debug_ = get_parameter("publish_debug").as_bool();
+  aim_offset_ratio_ = get_parameter("aim_offset_ratio").as_double();
+  lpf_alpha_ = get_parameter("lpf_alpha").as_double();
 
   image_sub_ = image_transport::create_subscription(
       this, "/sony/image_raw",
@@ -101,6 +105,8 @@ void FaceAimNode::try_match_and_process()
   }
   RCLCPP_INFO(get_logger(), "try_match: matched");
 
+  const float image_width = static_cast<float>(pending_image_->width);
+  const float image_height = static_cast<float>(pending_image_->height);
   const auto& tracks = *pending_tracks_;
 
   vision_servo_msgs::msg::AimTarget2D aim;
@@ -119,19 +125,46 @@ void FaceAimNode::try_match_and_process()
           return t.id == id && t.class_name == "person";
         });
 
-    if (it != tracks.targets.end() && it->visible) {
+    if (it != tracks.targets.end()) {
+
       aim.tracking_id = it->id;
-      aim.pixel_x = it->center[0];
-      aim.pixel_y = it->center[1];
+
+      if (it->visible) {
+        aim.source = vision_servo_msgs::msg::AimTarget2D::UPPER_BODY;
+      } else {
+        aim.source = vision_servo_msgs::msg::AimTarget2D::LOST_PREDICTION;
+      }
+
+      const float raw_x = it->center[0];
+      const float raw_y = it->bbox[1] + aim_offset_ratio_ * it->height;
+
+      if (!filter_initialized_ || it->id != last_tracking_id_) {
+        filtered_x_ = raw_x;
+        filtered_y_ = raw_y;
+        filter_initialized_ = true;
+      } else {
+        filtered_x_ = static_cast<float>(lpf_alpha_) * raw_x +
+            static_cast<float>(1.0 - lpf_alpha_) * filtered_x_;
+        filtered_y_ = static_cast<float>(lpf_alpha_) * raw_y +
+            static_cast<float>(1.0 - lpf_alpha_) * filtered_y_;
+      }
+      last_tracking_id_ = it->id;
+
+      aim.pixel_x = std::clamp(filtered_x_, 0.0f, image_width);
+      aim.pixel_y = std::clamp(filtered_y_, 0.0f, image_height);
       aim.confidence = it->confidence;
-      aim.source = vision_servo_msgs::msg::AimTarget2D::UPPER_BODY;
       aim.valid = true;
+
+    } else {
+      filter_initialized_ = false;
+      last_tracking_id_ = -1;
     }
   }
 
   aim_pub_->publish(aim);
-  RCLCPP_INFO(get_logger(), "published valid=%s id=%d (%.1f, %.1f)",
-      aim.valid ? "true" : "false", aim.tracking_id, aim.pixel_x, aim.pixel_y);
+  RCLCPP_INFO(get_logger(), "published valid=%s id=%d source=%d (%.1f, %.1f)",
+      aim.valid ? "true" : "false", aim.tracking_id, aim.source,
+      aim.pixel_x, aim.pixel_y);
 
   if (publish_debug_) {
     publish_debug_image(pending_image_, aim.header, aim);
@@ -150,6 +183,8 @@ void FaceAimNode::check_timeout()
 
   if (in_timeout && !was_in_timeout_) {
     was_in_timeout_ = true;
+    filter_initialized_ = false;
+    last_tracking_id_ = -1;
     RCLCPP_INFO(get_logger(), "check_timeout: entering timeout");
     vision_servo_msgs::msg::AimTarget2D aim;
     aim.header.stamp = this->now();
@@ -195,11 +230,14 @@ void FaceAimNode::publish_debug_image(
     const cv::Point aim_pt(
         static_cast<int>(aim.pixel_x),
         static_cast<int>(aim.pixel_y));
-    cv::circle(debug, aim_pt, 5, cv::Scalar(0, 255, 0), -1);
+    const cv::Scalar color = (aim.source == vision_servo_msgs::msg::AimTarget2D::LOST_PREDICTION)
+        ? cv::Scalar(0, 165, 255)
+        : cv::Scalar(0, 255, 0);
+    cv::circle(debug, aim_pt, 5, color, -1);
     cv::putText(debug,
         "ID:" + std::to_string(aim.tracking_id),
         cv::Point(aim_pt.x + 10, aim_pt.y - 10),
-        cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
+        cv::FONT_HERSHEY_SIMPLEX, 0.6, color, 2);
   }
 
   const auto bridge = cv_bridge::CvImage(header, "bgr8", debug).toImageMsg();
