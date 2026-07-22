@@ -31,6 +31,7 @@ def generate_launch_description():
                 "base_yaw_sign": ParameterValue(
                     LaunchConfiguration("base_yaw_sign"), value_type=float
                 ),
+                "aim_target_topic": LaunchConfiguration("aim_target_topic"),
             },
         ],
     )
@@ -55,6 +56,11 @@ def generate_launch_description():
             "base_yaw_sign",
             default_value="-1.0",
             description="Direction from relative RS2 yaw to ROS base angular.z.",
+        ),
+        DeclareLaunchArgument(
+            "aim_target_topic",
+            default_value="/perception/aim_target_2d",
+            description="AimTarget2D topic for gimbal yaw/pitch control.",
         ),
         controller,
     ])

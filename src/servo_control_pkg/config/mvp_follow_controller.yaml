@@ -50,6 +50,8 @@ mvp_follow_controller_node:
     filter_alpha_cmd: 0.3
 
     target_timeout: 0.5
+    aim_target_topic: /perception/aim_target_2d
+    aim_target_timeout: 0.25
 
     use_mock_gimbal_state: true
     mock_q_yaw: 0.0

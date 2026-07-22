@@ -38,6 +38,8 @@ mvp_follow_controller_node:
     filter_alpha_depth: 0.20
     filter_alpha_cmd: 0.20
     target_timeout: 0.25
+    aim_target_topic: /perception/aim_target_2d
+    aim_target_timeout: 0.25
 
     min_depth_confidence: 0.60
     min_valid_depth: 0.30
