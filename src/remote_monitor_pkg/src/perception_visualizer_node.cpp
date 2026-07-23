@@ -39,6 +39,8 @@
 #include <vision_servo_msgs/msg/perception_monitor.hpp>
 #include <vision_servo_msgs/msg/target.hpp>
 #include <vision_servo_msgs/msg/target_array.hpp>
+#include <vision_servo_msgs/msg/aim_target2_d.hpp>
+#include <vision_servo_msgs/msg/servo_state.hpp>
 
 namespace remote_monitor_pkg {
 namespace {
@@ -145,6 +147,42 @@ cv::Scalar tracking_color(uint8_t state)
       return cv::Scalar(150, 150, 150);     // gray
     default:
       return cv::Scalar(0, 220, 0);         // green
+  }
+}
+
+std::string aim_source_name(uint8_t source)
+{
+  switch (source) {
+    case vision_servo_msgs::msg::AimTarget2D::FACE:
+      return "FACE";
+    case vision_servo_msgs::msg::AimTarget2D::KEYPOINT:
+      return "KEYPOINT";
+    case vision_servo_msgs::msg::AimTarget2D::PREDICTED_FACE:
+      return "PREDICTED_FACE";
+    case vision_servo_msgs::msg::AimTarget2D::UPPER_BODY:
+      return "UPPER_BODY";
+    case vision_servo_msgs::msg::AimTarget2D::LOST_PREDICTION:
+      return "LOST_PRED";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+cv::Scalar aim_source_color(uint8_t source)
+{
+  switch (source) {
+    case vision_servo_msgs::msg::AimTarget2D::FACE:
+      return cv::Scalar(0, 255, 0);
+    case vision_servo_msgs::msg::AimTarget2D::KEYPOINT:
+      return cv::Scalar(255, 0, 0);
+    case vision_servo_msgs::msg::AimTarget2D::PREDICTED_FACE:
+      return cv::Scalar(0, 255, 255);
+    case vision_servo_msgs::msg::AimTarget2D::UPPER_BODY:
+      return cv::Scalar(0, 165, 255);
+    case vision_servo_msgs::msg::AimTarget2D::LOST_PREDICTION:
+      return cv::Scalar(0, 0, 200);
+    default:
+      return cv::Scalar(200, 200, 200);
   }
 }
 
@@ -273,6 +311,10 @@ public:
         "diagnostics", rclcpp::QoS(rclcpp::KeepLast(10)).reliable(),
         std::bind(&PerceptionVisualizerNode::diagnostics_callback, this, std::placeholders::_1));
 
+    aim_target_sub_ = create_subscription<vision_servo_msgs::msg::AimTarget2D>(
+        "aim_target", sensor_qos,
+        std::bind(&PerceptionVisualizerNode::aim_target_callback, this, std::placeholders::_1));
+
     if (enable_future_inputs_) {
       target_3d_sub_ = create_subscription<TargetArray>(
           "target_3d", sensor_qos,
@@ -283,6 +325,9 @@ public:
       gimbal_sub_ = create_subscription<vision_servo_msgs::msg::GimbalStatus>(
           "gimbal_state", sensor_qos,
           std::bind(&PerceptionVisualizerNode::gimbal_callback, this, std::placeholders::_1));
+      servo_state_sub_ = create_subscription<vision_servo_msgs::msg::ServoState>(
+          "servo_state", rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
+          std::bind(&PerceptionVisualizerNode::servo_state_callback, this, std::placeholders::_1));
     }
 
     const auto period = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -348,6 +393,12 @@ private:
         "draw_tracks", true, descriptor("Draw tracked boxes, IDs, and lifecycle state."));
     draw_status_overlay_ = declare_parameter<bool>(
         "draw_status_overlay", true, descriptor("Draw component and performance telemetry."));
+    draw_center_crosshair_ = declare_parameter<bool>(
+        "draw_center_crosshair", true, descriptor("Draw image center crosshair."));
+    draw_aim_crosshair_ = declare_parameter<bool>(
+        "draw_aim_crosshair", true, descriptor("Draw aim target crosshair."));
+    draw_aim_info_ = declare_parameter<bool>(
+        "draw_aim_info", true, descriptor("Draw aim source, confidence, and latency."));
     render_without_subscribers_ = declare_parameter<bool>(
         "render_without_subscribers", false,
         descriptor("Render frames even when no remote/local image subscriber exists."));
@@ -585,6 +636,25 @@ private:
     gimbal_last_update_ = SteadyClock::now();
   }
 
+  void aim_target_callback(
+      const vision_servo_msgs::msg::AimTarget2D::ConstSharedPtr& message)
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    latest_aim_target_ = *message;
+    aim_target_last_update_ = SteadyClock::now();
+    if (message->valid) {
+      aim_latency_ms_ = observed_latency_ms(message->header.stamp);
+    }
+  }
+
+  void servo_state_callback(
+      const vision_servo_msgs::msg::ServoState::ConstSharedPtr& message)
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    servo_state_ = message->state;
+    servo_state_last_update_ = SteadyClock::now();
+  }
+
   uint8_t health_with_timeout(const ComponentHealth& component, SteadyClock::time_point current) const
   {
     if (component.last_update.time_since_epoch().count() == 0) {
@@ -705,6 +775,47 @@ private:
         }
       }
 
+      if (draw_center_crosshair_) {
+        const int cx = canvas.cols / 2;
+        const int cy = canvas.rows / 2;
+        const int css = 16;
+        cv::line(canvas, {cx - css, cy}, {cx + css, cy}, cv::Scalar(200, 230, 255), 1, cv::LINE_AA);
+        cv::line(canvas, {cx, cy - css}, {cx, cy + css}, cv::Scalar(200, 230, 255), 1, cv::LINE_AA);
+        cv::circle(canvas, {cx, cy}, 3, cv::Scalar(200, 230, 255), 1);
+      }
+
+      if (draw_aim_crosshair_ || draw_aim_info_) {
+        std::optional<vision_servo_msgs::msg::AimTarget2D> aim;
+        {
+          std::lock_guard<std::mutex> lock(state_mutex_);
+          aim = latest_aim_target_;
+        }
+        if (aim && aim->valid) {
+          const cv::Point aim_pt(
+              static_cast<int>(aim->pixel_x),
+              static_cast<int>(aim->pixel_y));
+          const cv::Scalar color = aim_source_color(aim->source);
+          if (draw_aim_crosshair_) {
+            const int cx = canvas.cols / 2;
+            const int cy = canvas.rows / 2;
+            cv::line(canvas, {cx, cy}, aim_pt, cv::Scalar(200, 200, 200, 140), 1, cv::LINE_AA);
+            const int cs = 25;
+            cv::line(canvas, {aim_pt.x - cs, aim_pt.y}, {aim_pt.x + cs, aim_pt.y}, color, 2, cv::LINE_AA);
+            cv::line(canvas, {aim_pt.x, aim_pt.y - cs}, {aim_pt.x, aim_pt.y + cs}, color, 2, cv::LINE_AA);
+            cv::circle(canvas, aim_pt, 5, color, cv::FILLED);
+          }
+          if (draw_aim_info_) {
+            std::ostringstream label;
+            label << aim_source_name(aim->source) << " ID:" << aim->tracking_id
+                  << " " << std::fixed << std::setprecision(2) << aim->confidence;
+            draw_label(canvas, label.str(), {aim_pt.x + 12, aim_pt.y - 12}, color, 0.5);
+            std::ostringstream lat_label;
+            lat_label << std::fixed << std::setprecision(1) << aim_latency_ms_ << " ms";
+            draw_label(canvas, lat_label.str(), {aim_pt.x + 12, aim_pt.y + 8}, color, 0.45);
+          }
+        }
+      }
+
       if (draw_status_overlay_) {
         draw_status(canvas, make_monitor_message(image->header));
       }
@@ -758,7 +869,7 @@ private:
     }
   }
 
-  static void draw_status(cv::Mat& image, const Monitor& status)
+  void draw_status(cv::Mat& image, const Monitor& status)
   {
     if (image.empty()) {
       return;
@@ -801,6 +912,36 @@ private:
       }
       lines.push_back(line.str());
     }
+    {
+      std::ostringstream line;
+      line << std::fixed << std::setprecision(1)
+           << "Aim latency: " << aim_latency_ms_ << " ms";
+      lines.push_back(line.str());
+    }
+    {
+      std::ostringstream line;
+      line << "Servo: ";
+      switch (servo_state_) {
+        case vision_servo_msgs::msg::ServoState::IDLE:
+          line << "IDLE"; break;
+        case vision_servo_msgs::msg::ServoState::CONVERGING:
+          line << "CONVERGING"; break;
+        case vision_servo_msgs::msg::ServoState::TRACKING:
+          line << "TRACKING"; break;
+        case vision_servo_msgs::msg::ServoState::LOST:
+          line << "LOST"; break;
+        case vision_servo_msgs::msg::ServoState::ERROR:
+          line << "ERROR"; break;
+        default:
+          line << "N/A"; break;
+      }
+      if (servo_state_last_update_.time_since_epoch().count() > 0) {
+        line << " (active)";
+      } else {
+        line << " (unavailable)";
+      }
+      lines.push_back(line.str());
+    }
 
     constexpr int margin = 10;
     constexpr int line_height = 24;
@@ -836,6 +977,9 @@ private:
   bool draw_detections_ = true;
   bool draw_tracks_ = true;
   bool draw_status_overlay_ = true;
+  bool draw_center_crosshair_ = true;
+  bool draw_aim_crosshair_ = true;
+  bool draw_aim_info_ = true;
   bool render_without_subscribers_ = false;
   bool enable_future_inputs_ = false;
   std::string yolo_model_{"yolov8n"};
@@ -846,9 +990,11 @@ private:
   rclcpp::Subscription<TargetArray>::SharedPtr detections_sub_;
   rclcpp::Subscription<TargetArray>::SharedPtr tracks_sub_;
   rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_sub_;
+  rclcpp::Subscription<vision_servo_msgs::msg::AimTarget2D>::SharedPtr aim_target_sub_;
   rclcpp::Subscription<TargetArray>::SharedPtr target_3d_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<vision_servo_msgs::msg::GimbalStatus>::SharedPtr gimbal_sub_;
+  rclcpp::Subscription<vision_servo_msgs::msg::ServoState>::SharedPtr servo_state_sub_;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr tracking_image_pub_;
   rclcpp::Publisher<Monitor>::SharedPtr monitor_pub_;
   rclcpp::TimerBase::SharedPtr status_timer_;
@@ -868,6 +1014,7 @@ private:
   double tracking_latency_ms_ = -1.0;
   double visualization_latency_ms_ = -1.0;
   double inference_time_estimate_ms_ = -1.0;
+  double aim_latency_ms_ = -1.0;
   uint32_t detection_count_ = 0;
   uint32_t track_count_ = 0;
   int32_t tracking_target_id_ = -1;
@@ -889,6 +1036,11 @@ private:
   SteadyClock::time_point target_3d_last_update_{};
   SteadyClock::time_point cmd_vel_last_update_{};
   SteadyClock::time_point gimbal_last_update_{};
+
+  std::optional<vision_servo_msgs::msg::AimTarget2D> latest_aim_target_;
+  SteadyClock::time_point aim_target_last_update_{};
+  uint8_t servo_state_ = 255;
+  SteadyClock::time_point servo_state_last_update_{};
 };
 
 }  // namespace remote_monitor_pkg

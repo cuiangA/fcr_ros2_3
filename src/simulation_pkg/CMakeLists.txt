@@ -15,6 +15,7 @@ install(PROGRAMS
   scripts/servo_bag_eval_node.py
   scripts/aim_mock_source.py
   scripts/aim_separation_acceptance.py
+  scripts/t07_mock_test.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

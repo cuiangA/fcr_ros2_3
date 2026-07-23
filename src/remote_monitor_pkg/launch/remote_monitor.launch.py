@@ -41,6 +41,9 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument("cmd_vel_topic", default_value="/cmd_vel"),
         DeclareLaunchArgument("gimbal_state_topic", default_value="/gimbal/status"),
+        DeclareLaunchArgument(
+            "aim_target_topic", default_value="/perception/aim_target_2d"
+        ),
         DeclareLaunchArgument("enable_future_inputs", default_value="false"),
         DeclareLaunchArgument("remote_publish_rate_hz", default_value="10.0"),
         DeclareLaunchArgument("remote_max_width", default_value="960"),
@@ -97,6 +100,7 @@ def generate_launch_description():
             ("target_3d", LaunchConfiguration("target_3d_topic")),
             ("cmd_vel", LaunchConfiguration("cmd_vel_topic")),
             ("gimbal_state", LaunchConfiguration("gimbal_state_topic")),
+            ("aim_target", LaunchConfiguration("aim_target_topic")),
         ],
         condition=IfCondition(LaunchConfiguration("enable_visualizer")),
     )
@@ -121,7 +125,7 @@ def generate_launch_description():
                     # to multi-megabyte BGR frames and build a send backlog.
                     "^/sony/camera_info$",
                     "^/perception/tracking_image/compressed$",
-                    "^/perception/(?:detections|tracks|monitor_status|targets_3d)$",
+                    "^/perception/(?:detections|tracks|monitor_status|targets_3d|aim_target_2d)$",
                     "^/diagnostics$",
                     "^/rosout$",
                     "^/cmd_vel$",
