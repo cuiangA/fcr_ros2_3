@@ -44,7 +44,7 @@ while (($# > 0)); do
   esac
 done
 
-for command_name in ip readlink basename modprobe; do
+for command_name in ip readlink basename modprobe sleep; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "ERROR: required command not found: $command_name" >&2
     exit 1
@@ -75,6 +75,18 @@ driver_for_interface() {
   [[ -n "$driver_path" ]] && basename "$driver_path"
 }
 
+detect_gs_usb_interfaces() {
+  local interface_path interface
+  candidates=()
+  for interface_path in /sys/class/net/can*; do
+    [[ -e "$interface_path" ]] || continue
+    interface="$(basename "$interface_path")"
+    if [[ "$(driver_for_interface "$interface")" == "gs_usb" ]]; then
+      candidates+=("$interface")
+    fi
+  done
+}
+
 declare -a candidates=()
 
 if [[ -n "$REQUESTED_INTERFACE" ]]; then
@@ -89,13 +101,7 @@ if [[ -n "$REQUESTED_INTERFACE" ]]; then
   }
   candidates=("$REQUESTED_INTERFACE")
 else
-  for interface_path in /sys/class/net/can*; do
-    [[ -e "$interface_path" ]] || continue
-    interface="$(basename "$interface_path")"
-    if [[ "$(driver_for_interface "$interface")" == "gs_usb" ]]; then
-      candidates+=("$interface")
-    fi
-  done
+  detect_gs_usb_interfaces
 fi
 
 case "${#candidates[@]}" in
@@ -117,10 +123,37 @@ esac
 echo "Detected gimbal USB-CAN: ${interface} (driver=gs_usb)"
 echo "Configuring bitrate=${BITRATE}, restart-ms=${RESTART_MS}, txqueuelen=${TX_QUEUE_LEN}"
 
-ip link set "$interface" down 2>/dev/null || true
-ip link set "$interface" type can bitrate "$BITRATE" restart-ms "$RESTART_MS"
-ip link set "$interface" txqueuelen "$TX_QUEUE_LEN"
-ip link set "$interface" up
+configured=false
+for attempt in 1 2 3; do
+  if [[ "$(driver_for_interface "$interface")" != "gs_usb" ]]; then
+    echo "WARN: ${interface} disappeared or changed driver before configuration (attempt ${attempt}/3)" >&2
+  elif ip link set "$interface" down 2>/dev/null &&
+       ip link set "$interface" type can bitrate "$BITRATE" restart-ms "$RESTART_MS" &&
+       ip link set "$interface" txqueuelen "$TX_QUEUE_LEN" &&
+       ip link set "$interface" up; then
+    configured=true
+    break
+  else
+    echo "WARN: failed to configure ${interface}; waiting for USB-CAN re-enumeration (attempt ${attempt}/3)" >&2
+  fi
+
+  command -v udevadm >/dev/null 2>&1 && udevadm settle || true
+  sleep 1
+  if [[ -z "$REQUESTED_INTERFACE" ]]; then
+    detect_gs_usb_interfaces
+    if [[ ${#candidates[@]} -eq 1 ]]; then
+      interface="${candidates[0]}"
+      echo "Re-detected gimbal USB-CAN as ${interface}"
+    fi
+  fi
+done
+
+if [[ "$configured" != true ]]; then
+  echo "ERROR: gs_usb adapter disappeared or could not be configured" >&2
+  echo "Recovery: stop ROS nodes, unplug/replug the USB-CAN adapter, then rerun this script." >&2
+  echo "Do not substitute a board mttcan interface unless the gimbal is physically wired to it." >&2
+  exit 1
+fi
 
 state="$(cat "/sys/class/net/${interface}/operstate")"
 [[ "$state" == "up" || "$state" == "unknown" ]] || {
