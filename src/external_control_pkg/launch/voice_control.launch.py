@@ -14,17 +14,24 @@ from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     cloud_asr_url = LaunchConfiguration("cloud_asr_url")
     cmd_topic = LaunchConfiguration("cmd_topic")
+    text_topic = LaunchConfiguration("text_topic")
     model_dir = LaunchConfiguration("model_dir")
     energy_threshold = LaunchConfiguration("energy_threshold")
     silence_timeout = LaunchConfiguration("silence_timeout")
     mic_device = LaunchConfiguration("mic_device")
     start_wake_up_node = LaunchConfiguration("start_wake_up_node")
+    start_dispatcher = LaunchConfiguration("start_dispatcher")
+    start_intent_classifier = LaunchConfiguration("start_intent_classifier")
+    publish_cloud_intents = LaunchConfiguration("publish_cloud_intents")
+    classifier_model_root = LaunchConfiguration("classifier_model_root")
+    embedding_model_dir = LaunchConfiguration("embedding_model_dir")
     start_command_router = LaunchConfiguration("start_command_router")
     start_keyboard_node = LaunchConfiguration("start_keyboard_node")
     cmd_gimbal_topic = LaunchConfiguration("cmd_gimbal_topic")
@@ -37,6 +44,9 @@ def generate_launch_description():
     right_yaw_sign = LaunchConfiguration("right_yaw_sign")
     up_pitch_sign = LaunchConfiguration("up_pitch_sign")
     min_confidence = LaunchConfiguration("min_confidence")
+    gimbal_voice_command_topic = LaunchConfiguration(
+        "gimbal_voice_command_topic"
+    )
 
     nudge_config = PathJoinSubstitution([
         FindPackageShare("external_control_pkg"),
@@ -79,6 +89,43 @@ def generate_launch_description():
             "start_wake_up_node",
             default_value="true",
             description="是否启动 wake_up_node；依赖未安装时可设为 false，仅验证语音指令桥接",
+        ),
+        DeclareLaunchArgument(
+            "text_topic",
+            default_value="/voice/text",
+            description="ASR 文本输出和本地意图模型输入话题",
+        ),
+        DeclareLaunchArgument(
+            "start_dispatcher",
+            default_value="true",
+            description="是否启动结构化语音意图分发器",
+        ),
+        DeclareLaunchArgument(
+            "start_intent_classifier",
+            default_value="false",
+            description="是否启动本地双层意图分类节点",
+        ),
+        DeclareLaunchArgument(
+            "publish_cloud_intents",
+            default_value="true",
+            description=(
+                "兼容模式是否直发云端意图；使用本地双层模型时必须设为 false"
+            ),
+        ),
+        DeclareLaunchArgument(
+            "classifier_model_root",
+            default_value="",
+            description="双层分类模型根目录",
+        ),
+        DeclareLaunchArgument(
+            "embedding_model_dir",
+            default_value="",
+            description="BGE 语义嵌入模型目录",
+        ),
+        DeclareLaunchArgument(
+            "gimbal_voice_command_topic",
+            default_value="/voice/gimbal_command",
+            description="分发器输出给云台执行桥接的话题",
         ),
         DeclareLaunchArgument(
             "cmd_gimbal_topic",
@@ -143,6 +190,19 @@ def generate_launch_description():
 
         Node(
             package="external_control_pkg",
+            executable="voice_command_dispatcher_node",
+            name="voice_command_dispatcher_node",
+            output="screen",
+            condition=IfCondition(start_dispatcher),
+            parameters=[{
+                "input_topic": cmd_topic,
+                "gimbal_topic": gimbal_voice_command_topic,
+                "min_confidence": min_confidence,
+            }],
+        ),
+
+        Node(
+            package="external_control_pkg",
             executable="wake_up_node",       # ← 改为 C++ 编译目标（不再是 .py）
             name="wake_up_node",
             output="screen",
@@ -150,10 +210,28 @@ def generate_launch_description():
             parameters=[{
                 "cloud_asr_url": cloud_asr_url,
                 "cmd_topic": cmd_topic,
+                "text_topic": text_topic,
+                "publish_cloud_intents": ParameterValue(
+                    publish_cloud_intents, value_type=bool
+                ),
                 "model_dir": model_dir,
                 "energy_threshold": energy_threshold,
                 "silence_timeout": silence_timeout,
                 "mic_device": mic_device,
+            }],
+        ),
+
+        Node(
+            package="voice_intent_pkg",
+            executable="double_layer_console_voice_node",
+            name="intent_classifier_node",
+            output="screen",
+            condition=IfCondition(start_intent_classifier),
+            parameters=[{
+                "model_root": classifier_model_root,
+                "embedding_model_dir": embedding_model_dir,
+                "text_input_topic": text_topic,
+                "enable_console_input": False,
             }],
         ),
 
@@ -165,7 +243,7 @@ def generate_launch_description():
             parameters=[
                 nudge_config,
                 {
-                    "voice_command_topic": cmd_topic,
+                    "voice_command_topic": gimbal_voice_command_topic,
                     "cmd_gimbal_topic": cmd_gimbal_topic,
                     "yaw_step_rate": nudge_yaw_rate,
                     "pitch_step_rate": nudge_pitch_rate,
@@ -173,6 +251,7 @@ def generate_launch_description():
                     "right_yaw_sign": right_yaw_sign,
                     "up_pitch_sign": up_pitch_sign,
                     "min_confidence": min_confidence,
+                    "enable_raw_text_fallback": False,
                 },
             ],
         ),

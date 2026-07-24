@@ -7,7 +7,7 @@
  *   2. 检测到唤醒词后进入录音模式
  *   3. 基于 RMS 能量做 VAD：有声音时录音，安静 1.5 s 后结束
  *   4. 将录音保存为临时 WAV 文件，通过 HTTP POST 发往本地/云端服务器
- *   5. 解析返回的 JSON 为 VoiceCommand.msg 并发布到 /external/voice_command
+ *   5. 发布 ASR 文本；兼容模式下也可发布云端返回的 VoiceCommand
  *
  * 使用 reSpeaker XVF3800 等 USB 音频设备时，通过 mic_device 参数指定设备索引。
  *
@@ -19,6 +19,7 @@
 #include "external_control_pkg/msg/voice_command.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <portaudio.h>
 #include <curl/curl.h>
@@ -88,6 +89,8 @@ public:
 
     this->declare_parameter("cloud_asr_url", "http://localhost:8080/asr");
     this->declare_parameter("cmd_topic", "/external/voice_command");
+    this->declare_parameter("text_topic", "/voice/text");
+    this->declare_parameter("publish_cloud_intents", true);
     this->declare_parameter("model_dir", default_model_dir);
     this->declare_parameter("energy_threshold", kEnergyThreshold);
     this->declare_parameter("silence_timeout", kSilenceTimeoutSec);
@@ -95,6 +98,9 @@ public:
 
     asr_url_ = this->get_parameter("cloud_asr_url").as_string();
     cmd_topic_ = this->get_parameter("cmd_topic").as_string();
+    text_topic_ = this->get_parameter("text_topic").as_string();
+    publish_cloud_intents_ =
+      this->get_parameter("publish_cloud_intents").as_bool();
     model_dir_ = this->get_parameter("model_dir").as_string();
     if (model_dir_.empty()) {
       // launch 文件传了空字符串时，回退到编译期默认值
@@ -115,6 +121,8 @@ public:
     // ── 4. 创建发布者 ────────────────────────────────────────────
     cmd_pub_ = this->create_publisher<external_control_pkg::msg::VoiceCommand>(
       cmd_topic_, rclcpp::QoS(10).reliable());
+    text_pub_ = this->create_publisher<std_msgs::msg::String>(
+      text_topic_, rclcpp::QoS(10).reliable());
 
     // ── 5. 启动定时器（与音频帧率对齐） ──────────────────────────
     int period_ms = static_cast<int>(kChunkSize * 1000.0 / kSampleRate);
@@ -123,8 +131,9 @@ public:
       std::bind(&WakeUpNode::listenLoop, this));
 
     RCLCPP_INFO(this->get_logger(),
-                "语音唤醒节点已启动 | 模型=%s, ASR=%s, 话题=%s",
-                model_dir_.c_str(), asr_url_.c_str(), cmd_topic_.c_str());
+                "语音唤醒节点已启动 | 模型=%s, ASR=%s, 文本=%s, 云端意图=%s",
+                model_dir_.c_str(), asr_url_.c_str(), text_topic_.c_str(),
+                publish_cloud_intents_ ? "enabled" : "disabled");
   }
 
   ~WakeUpNode() override {
@@ -378,16 +387,26 @@ private:
     // ── 调用云端 ASR ──────────────────────────────────────────
     auto cmd_msg = callCloudAsr(wav_path);
 
-    // ── 发布指令 ──────────────────────────────────────────────
-    cmd_pub_->publish(cmd_msg);
+    // ── 发布 ASR 文本；新版模式由本地意图模型统一解释 ─────────
+    if (!cmd_msg.raw_text.empty()) {
+      auto text_msg = std_msgs::msg::String();
+      text_msg.data = cmd_msg.raw_text;
+      text_pub_->publish(text_msg);
+    }
+    if (publish_cloud_intents_) {
+      cmd_pub_->publish(cmd_msg);
+    }
 
     std::string intents_str;
     for (size_t i = 0; i < cmd_msg.intents.size(); ++i) {
       if (i > 0) intents_str += ", ";
       intents_str += cmd_msg.intents[i];
     }
-    RCLCPP_INFO(this->get_logger(), "已发布指令: intents=[%s], raw_text=\"%s\"",
-                intents_str.c_str(), cmd_msg.raw_text.c_str());
+    RCLCPP_INFO(
+      this->get_logger(),
+      "ASR 完成: intents=[%s], raw_text=\"%s\", cloud_intents_published=%s",
+      intents_str.c_str(), cmd_msg.raw_text.c_str(),
+      publish_cloud_intents_ ? "true" : "false");
 
     // ── 清理临时文件 ──────────────────────────────────────────
     std::remove(wav_path.c_str());
@@ -548,15 +567,18 @@ private:
 
   // ROS2 基础设施
   rclcpp::Publisher<external_control_pkg::msg::VoiceCommand>::SharedPtr cmd_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr text_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   // 参数
   std::string asr_url_;
   std::string cmd_topic_;
+  std::string text_topic_;
   std::string model_dir_;
   float energy_thr_;
   double silence_to_;
   int mic_device_;
+  bool publish_cloud_intents_ = true;
 
   // 模型路径（生命周期与节点相同，c_str() 指针稳定）
   std::string model_encoder_;

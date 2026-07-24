@@ -4,7 +4,8 @@
  *
  * This node intentionally handles only small manual gimbal nudges. It is the
  * first narrow link from natural language to actuator command:
- *   "向右一点" -> /external/voice_command -> /voice/cmd_gimbal -> command_router_node
+ *   gimbal_nudge_right -> /voice/gimbal_command -> /voice/cmd_gimbal
+ *   -> command_router_node
  */
 
 #include "external_control_pkg/msg/voice_command.hpp"
@@ -28,7 +29,7 @@ public:
     const rclcpp::NodeOptions& options = rclcpp::NodeOptions())
   : Node("voice_gimbal_nudge_node", options)
   {
-    declare_parameter("voice_command_topic", "/external/voice_command");
+    declare_parameter("voice_command_topic", "/voice/gimbal_command");
     declare_parameter("cmd_gimbal_topic", "/voice/cmd_gimbal");
     declare_parameter("gimbal_home_service", "/voice/gimbal_home");
     declare_parameter("publish_rate_hz", 20.0);
@@ -40,6 +41,7 @@ public:
     declare_parameter("up_pitch_sign", 1.0);
     declare_parameter("speed_scale_step", 0.2);
     declare_parameter("frame_id", "gimbal_link");
+    declare_parameter("enable_raw_text_fallback", false);
 
     voice_command_topic_ = get_parameter("voice_command_topic").as_string();
     cmd_gimbal_topic_ = get_parameter("cmd_gimbal_topic").as_string();
@@ -53,6 +55,8 @@ public:
     up_pitch_sign_ = sign(get_parameter("up_pitch_sign").as_double());
     speed_scale_step_ = std::clamp(get_parameter("speed_scale_step").as_double(), 0.05, 0.5);
     frame_id_ = get_parameter("frame_id").as_string();
+    enable_raw_text_fallback_ =
+      get_parameter("enable_raw_text_fallback").as_bool();
 
     auto reliable_qos = rclcpp::QoS(10).reliable();
     voice_sub_ = create_subscription<external_control_pkg::msg::VoiceCommand>(
@@ -69,9 +73,11 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "voice_gimbal_nudge_node started | voice=%s -> gimbal=%s | yaw_rate=%.3f rad/s, duration=%.2fs",
+      "voice_gimbal_nudge_node started | voice=%s -> gimbal=%s | "
+      "yaw_rate=%.3f rad/s, duration=%.2fs | raw_fallback=%s",
       voice_command_topic_.c_str(), cmd_gimbal_topic_.c_str(),
-      yaw_step_rate_, step_duration_sec_);
+      yaw_step_rate_, step_duration_sec_,
+      enable_raw_text_fallback_ ? "true" : "false");
   }
 
   ~VoiceGimbalNudgeNode() override {
@@ -162,7 +168,7 @@ private:
   NudgeDirection classifyCommand(
     const external_control_pkg::msg::VoiceCommand& msg) const
   {
-    if (hasIntent(msg, {"gimbal_stop", "stop_gimbal", "stop"})) {
+    if (hasIntent(msg, {"gimbal_stop", "stop_gimbal"})) {
       return NudgeDirection::STOP;
     }
     if (hasIntent(msg, {"gimbal_home", "home_gimbal"})) {
@@ -185,6 +191,10 @@ private:
     }
     if (hasIntent(msg, {"gimbal_speed_down", "speed_down"})) {
       return NudgeDirection::SPEED_DOWN;
+    }
+
+    if (!enable_raw_text_fallback_) {
+      return NudgeDirection::NONE;
     }
 
     const auto& text = msg.raw_text;
@@ -338,6 +348,7 @@ private:
   double right_yaw_sign_ = 1.0;
   double up_pitch_sign_ = 1.0;
   double speed_scale_step_ = 0.2;
+  bool enable_raw_text_fallback_ = false;
   double speed_scale_ = 1.0;
 
   bool motion_active_ = false;

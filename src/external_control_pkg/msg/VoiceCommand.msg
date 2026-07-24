@@ -6,9 +6,8 @@ std_msgs/Header header
 
 # ── 意图列表 ─────────────────────────────────────────────────
 # 可能同时包含多个意图（多指令场景）
-# 可选值: start_following, stop_following, emergency_stop,
-#         switch_target, distance_adjust, gimbal_home, status_query,
-#         gimbal_nudge_left, gimbal_nudge_right, gimbal_stop
+# 正式意图集合见 docs/voice_command_catalog.md。
+# 执行节点只允许读取 intents，不得根据 raw_text 猜测硬件动作。
 string[] intents
 
 # ── 各意图的置信度（与 intents 一一对应） ─────────────────────

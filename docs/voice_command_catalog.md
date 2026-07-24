@@ -280,3 +280,13 @@ chat
 | P1 | 接通跟随任务管理和目标切换 |
 | P2 | 实现自主运镜任务编排 |
 | P2 | 扩展训练集并重新训练分层意图模型 |
+
+## 13. 当前执行契约
+
+新版双层模型接入后，所有结构化意图必须先经过
+`voice_command_dispatcher_node`。执行节点不得使用 `raw_text` 重新判断控制
+对象或方向。
+
+分发状态发布在 `/voice/dispatch_status`。其中 `accepted=true` 只表示已通过
+安全检查并路由，不表示硬件已经完成动作。详细架构见
+`docs/voice_control_architecture.md`。

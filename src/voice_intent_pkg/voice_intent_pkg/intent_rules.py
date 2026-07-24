@@ -5,6 +5,22 @@ from typing import Optional, Sequence, Tuple
 
 Rule = Tuple[str, Sequence[str]]
 
+GIMBAL_TARGET_WORDS: Sequence[str] = (
+    "云台",
+    "镜头",
+    "视野",
+)
+
+TARGET_REQUIRED_GIMBAL_INTENTS = {
+    "gimbal_stop",
+    "gimbal_nudge_right",
+    "gimbal_nudge_left",
+    "gimbal_nudge_up",
+    "gimbal_nudge_down",
+    "gimbal_speed_up",
+    "gimbal_speed_down",
+}
+
 GIMBAL_HOME_PHRASES: Sequence[str] = (
     "云台回中",
     "云台归位",
@@ -141,8 +157,19 @@ def resolve_control_intent(text: str) -> Optional[str]:
     """Return the supported deterministic control intent found in text."""
     variants = _rule_text_variants(text)
     for intent, phrases in CONTROL_RULES:
-        if any(phrase in variant for variant in variants for phrase in phrases):
-            return intent
+        if not any(
+            phrase in variant
+            for variant in variants
+            for phrase in phrases
+        ):
+            continue
+        if intent in TARGET_REQUIRED_GIMBAL_INTENTS and not any(
+            target in variant
+            for variant in variants
+            for target in GIMBAL_TARGET_WORDS
+        ):
+            continue
+        return intent
     return None
 
 

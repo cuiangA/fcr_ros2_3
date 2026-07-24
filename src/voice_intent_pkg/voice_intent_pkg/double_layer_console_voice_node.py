@@ -51,6 +51,8 @@ class DoubleLayerConsoleVoiceNode(Node):
         self.declare_parameter("max_fine_confusion", 0.05)
         self.declare_parameter("voice_command_topic", "/external/voice_command")
         self.declare_parameter("result_topic", "/external/intent_result")
+        self.declare_parameter("text_input_topic", "/voice/text")
+        self.declare_parameter("enable_console_input", True)
 
         model_root = Path(str(self.get_parameter("model_root").value)).expanduser()
         embedding_dir = Path(
@@ -80,12 +82,26 @@ class DoubleLayerConsoleVoiceNode(Node):
         self._result_pub = self.create_publisher(
             String, str(self.get_parameter("result_topic").value), 10
         )
+        self._text_sub = self.create_subscription(
+            String,
+            str(self.get_parameter("text_input_topic").value),
+            self._text_callback,
+            10,
+        )
         self._queue: "queue.Queue[Optional[str]]" = queue.Queue()
-        self._thread = threading.Thread(target=self._console_loop, daemon=True)
-        self._thread.start()
+        self._thread = None
+        if bool(self.get_parameter("enable_console_input").value):
+            self._thread = threading.Thread(
+                target=self._console_loop, daemon=True
+            )
+            self._thread.start()
         self.create_timer(0.05, self._consume_input)
         self.get_logger().info(
-            "双层意图控制台已就绪。输入中文后回车，输入 :q 退出。"
+            "双层意图节点已就绪 | text_input=%s | console=%s"
+            % (
+                str(self.get_parameter("text_input_topic").value),
+                bool(self.get_parameter("enable_console_input").value),
+            )
         )
 
     @staticmethod
@@ -122,6 +138,11 @@ class DoubleLayerConsoleVoiceNode(Node):
                 return
             elif text:
                 self._queue.put(text)
+
+    def _text_callback(self, message: String) -> None:
+        text = message.data.strip()
+        if text:
+            self._queue.put(text)
 
     def _consume_input(self) -> None:
         try:

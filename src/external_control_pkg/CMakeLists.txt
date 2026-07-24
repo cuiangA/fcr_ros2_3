@@ -4,8 +4,9 @@
 # 构建目标：
 #   1. wake_up_node — C++ 主节点（PortAudio + sherpa-onnx + libcurl）
 #   2. voice_gimbal_nudge_node — 语音短指令到 /voice/cmd_gimbal 的桥接节点
-#   3. command_router_node — 手动/语音/自主云台命令优先级仲裁
-#   4. keyboard_gimbal_control_node — 键盘云台调试控制
+#   3. voice_command_dispatcher_node — 结构化意图校验和目标分流
+#   4. command_router_node — 手动/语音/自主云台命令优先级仲裁
+#   5. keyboard_gimbal_control_node — 键盘云台调试控制
 #
 # 构建依赖（需预先安装）：
 #   sudo apt install portaudio19-dev libcurl4-openssl-dev nlohmann-json3-dev
@@ -86,6 +87,7 @@ find_path(SHERPA_ONNX_INCLUDE_DIR
 # ── 接口定义与代码生成 ───────────────────────────────────────────────
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/VoiceCommand.msg"
+  "msg/VoiceDispatchStatus.msg"
   DEPENDENCIES std_msgs
 )
 
@@ -150,6 +152,23 @@ target_link_libraries(voice_gimbal_nudge_node
 
 list(APPEND EXTERNAL_CONTROL_TARGETS voice_gimbal_nudge_node)
 
+# ── 结构化语音指令分发节点 ───────────────────────────────────────────
+add_executable(voice_command_dispatcher_node
+  src/voice_command_dispatcher_node.cpp
+)
+
+target_include_directories(voice_command_dispatcher_node PRIVATE include)
+
+ament_target_dependencies(voice_command_dispatcher_node
+  rclcpp std_msgs
+)
+
+target_link_libraries(voice_command_dispatcher_node
+  ${PROJECT_NAME}__rosidl_typesupport_cpp
+)
+
+list(APPEND EXTERNAL_CONTROL_TARGETS voice_command_dispatcher_node)
+
 # ── 云台命令优先级仲裁节点 ───────────────────────────────────────────
 add_executable(command_router_node
   src/command_router_node.cpp
@@ -178,5 +197,16 @@ install(TARGETS ${EXTERNAL_CONTROL_TARGETS}
 # ── 启动文件和模型 ───────────────────────────────────────────────────
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME} OPTIONAL)
 install(DIRECTORY models DESTINATION share/${PROJECT_NAME} OPTIONAL)
+install(DIRECTORY include/ DESTINATION include)
+
+ament_export_include_directories(include)
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_voice_intent_contract
+    test/test_voice_intent_contract.cpp
+  )
+  target_include_directories(test_voice_intent_contract PRIVATE include)
+endif()
 
 ament_package()

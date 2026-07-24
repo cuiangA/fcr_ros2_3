@@ -1,6 +1,6 @@
 voice_gimbal_nudge_node:
   ros__parameters:
-    voice_command_topic: "/external/voice_command"
+    voice_command_topic: "/voice/gimbal_command"
     cmd_gimbal_topic: "/voice/cmd_gimbal"
     gimbal_home_service: "/voice/gimbal_home"
     publish_rate_hz: 20.0
@@ -12,3 +12,4 @@ voice_gimbal_nudge_node:
     up_pitch_sign: 1.0
     speed_scale_step: 0.2
     frame_id: "gimbal_link"
+    enable_raw_text_fallback: false
