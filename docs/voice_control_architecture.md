@@ -38,7 +38,7 @@ ASR 或控制台文本
 |---|---|---|
 | `system` | `/voice/system_command` | 等待安全与状态管理节点 |
 | `gimbal` | `/voice/gimbal_command` | 方向、停止、回中已接入 |
-| `chassis` | `/voice/chassis_command` | 等待底盘型号和执行节点 |
+| `chassis` | `/voice/chassis_command` | 点动桥接与仲裁已实现，等待实机验收 |
 | `camera` | `/voice/camera_command` | 等待相机控制节点 |
 | `autonomy` | `/voice/autonomy_command` | 等待自主任务管理节点 |
 

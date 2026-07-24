@@ -39,6 +39,7 @@
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>geometry_msgs</depend>
   <depend>vision_servo_msgs</depend>     <!-- GimbalCmd 云台控制消息 -->
 
   <!-- ── rosidl 接口代码生成 ───────────────────────────────────── -->

@@ -5,8 +5,10 @@
 #   1. wake_up_node — C++ 主节点（PortAudio + sherpa-onnx + libcurl）
 #   2. voice_gimbal_nudge_node — 语音短指令到 /voice/cmd_gimbal 的桥接节点
 #   3. voice_command_dispatcher_node — 结构化意图校验和目标分流
-#   4. command_router_node — 手动/语音/自主云台命令优先级仲裁
-#   5. keyboard_gimbal_control_node — 键盘云台调试控制
+#   4. voice_chassis_nudge_node — 底盘结构化语音意图到短速度指令
+#   5. chassis_command_router_node — 底盘手动/语音/自主命令仲裁
+#   6. command_router_node — 手动/语音/自主云台命令优先级仲裁
+#   7. keyboard_gimbal_control_node — 键盘云台调试控制
 #
 # 构建依赖（需预先安装）：
 #   sudo apt install portaudio19-dev libcurl4-openssl-dev nlohmann-json3-dev
@@ -32,6 +34,7 @@ find_package(rclcpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)           # Header 消息
 find_package(std_srvs REQUIRED)           # Trigger 云台服务
+find_package(geometry_msgs REQUIRED)      # TwistStamped 底盘控制
 find_package(vision_servo_msgs REQUIRED)  # GimbalCmd
 
 # ── 依赖声明（系统库） ───────────────────────────────────────────────
@@ -168,6 +171,32 @@ target_link_libraries(voice_command_dispatcher_node
 )
 
 list(APPEND EXTERNAL_CONTROL_TARGETS voice_command_dispatcher_node)
+
+# ── 语音底盘短动作桥接节点 ─────────────────────────────────────────────
+add_executable(voice_chassis_nudge_node
+  src/voice_chassis_nudge_node.cpp
+)
+
+ament_target_dependencies(voice_chassis_nudge_node
+  rclcpp std_msgs geometry_msgs
+)
+
+target_link_libraries(voice_chassis_nudge_node
+  ${PROJECT_NAME}__rosidl_typesupport_cpp
+)
+
+list(APPEND EXTERNAL_CONTROL_TARGETS voice_chassis_nudge_node)
+
+# ── 底盘命令优先级仲裁节点 ───────────────────────────────────────────
+add_executable(chassis_command_router_node
+  src/chassis_command_router_node.cpp
+)
+
+ament_target_dependencies(chassis_command_router_node
+  rclcpp std_msgs geometry_msgs
+)
+
+list(APPEND EXTERNAL_CONTROL_TARGETS chassis_command_router_node)
 
 # ── 云台命令优先级仲裁节点 ───────────────────────────────────────────
 add_executable(command_router_node

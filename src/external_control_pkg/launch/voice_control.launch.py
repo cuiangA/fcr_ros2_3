@@ -33,6 +33,7 @@ def generate_launch_description():
     classifier_model_root = LaunchConfiguration("classifier_model_root")
     embedding_model_dir = LaunchConfiguration("embedding_model_dir")
     start_command_router = LaunchConfiguration("start_command_router")
+    start_chassis_control = LaunchConfiguration("start_chassis_control")
     start_keyboard_node = LaunchConfiguration("start_keyboard_node")
     cmd_gimbal_topic = LaunchConfiguration("cmd_gimbal_topic")
     manual_cmd_gimbal_topic = LaunchConfiguration("manual_cmd_gimbal_topic")
@@ -47,6 +48,18 @@ def generate_launch_description():
     gimbal_voice_command_topic = LaunchConfiguration(
         "gimbal_voice_command_topic"
     )
+    chassis_voice_command_topic = LaunchConfiguration(
+        "chassis_voice_command_topic"
+    )
+    voice_cmd_vel_topic = LaunchConfiguration("voice_cmd_vel_topic")
+    manual_cmd_vel_topic = LaunchConfiguration("manual_cmd_vel_topic")
+    autonomy_cmd_vel_topic = LaunchConfiguration("autonomy_cmd_vel_topic")
+    chassis_output_cmd_topic = LaunchConfiguration(
+        "chassis_output_cmd_topic"
+    )
+    chassis_linear_speed = LaunchConfiguration("chassis_linear_speed")
+    chassis_angular_speed = LaunchConfiguration("chassis_angular_speed")
+    chassis_nudge_duration = LaunchConfiguration("chassis_nudge_duration")
 
     nudge_config = PathJoinSubstitution([
         FindPackageShare("external_control_pkg"),
@@ -128,6 +141,51 @@ def generate_launch_description():
             description="分发器输出给云台执行桥接的话题",
         ),
         DeclareLaunchArgument(
+            "chassis_voice_command_topic",
+            default_value="/voice/chassis_command",
+            description="分发器输出给底盘语音桥接的话题",
+        ),
+        DeclareLaunchArgument(
+            "start_chassis_control",
+            default_value="true",
+            description="是否启动语音底盘点动桥接和底盘命令仲裁",
+        ),
+        DeclareLaunchArgument(
+            "voice_cmd_vel_topic",
+            default_value="/voice/cmd_vel",
+            description="语音底盘速度输入话题",
+        ),
+        DeclareLaunchArgument(
+            "manual_cmd_vel_topic",
+            default_value="/manual/cmd_vel",
+            description="手动底盘速度输入话题",
+        ),
+        DeclareLaunchArgument(
+            "autonomy_cmd_vel_topic",
+            default_value="/autonomy/cmd_vel",
+            description="自主底盘速度输入话题",
+        ),
+        DeclareLaunchArgument(
+            "chassis_output_cmd_topic",
+            default_value="/cmd_vel",
+            description="底盘仲裁器输出到驱动的话题",
+        ),
+        DeclareLaunchArgument(
+            "chassis_linear_speed",
+            default_value="0.05",
+            description="语音底盘点动线速度，单位 m/s",
+        ),
+        DeclareLaunchArgument(
+            "chassis_angular_speed",
+            default_value="0.20",
+            description="语音底盘点动角速度，单位 rad/s",
+        ),
+        DeclareLaunchArgument(
+            "chassis_nudge_duration",
+            default_value="0.4",
+            description="语音底盘点动持续时间，单位秒",
+        ),
+        DeclareLaunchArgument(
             "cmd_gimbal_topic",
             default_value="/voice/cmd_gimbal",
             description="语音云台控制输出话题，通常进入 command_router_node",
@@ -197,6 +255,7 @@ def generate_launch_description():
             parameters=[{
                 "input_topic": cmd_topic,
                 "gimbal_topic": gimbal_voice_command_topic,
+                "chassis_topic": chassis_voice_command_topic,
                 "min_confidence": min_confidence,
             }],
         ),
@@ -267,6 +326,36 @@ def generate_launch_description():
                 "voice_cmd_topic": cmd_gimbal_topic,
                 "autonomy_cmd_topic": autonomy_cmd_gimbal_topic,
                 "output_cmd_topic": router_output_cmd_topic,
+            }],
+        ),
+
+        Node(
+            package="external_control_pkg",
+            executable="voice_chassis_nudge_node",
+            name="voice_chassis_nudge_node",
+            output="screen",
+            condition=IfCondition(start_chassis_control),
+            parameters=[{
+                "voice_command_topic": chassis_voice_command_topic,
+                "cmd_vel_topic": voice_cmd_vel_topic,
+                "linear_speed": chassis_linear_speed,
+                "angular_speed": chassis_angular_speed,
+                "step_duration_sec": chassis_nudge_duration,
+                "min_confidence": min_confidence,
+            }],
+        ),
+
+        Node(
+            package="external_control_pkg",
+            executable="chassis_command_router_node",
+            name="chassis_command_router_node",
+            output="screen",
+            condition=IfCondition(start_chassis_control),
+            parameters=[{
+                "manual_cmd_topic": manual_cmd_vel_topic,
+                "voice_cmd_topic": voice_cmd_vel_topic,
+                "autonomy_cmd_topic": autonomy_cmd_vel_topic,
+                "output_cmd_topic": chassis_output_cmd_topic,
             }],
         ),
 
