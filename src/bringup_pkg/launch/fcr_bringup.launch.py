@@ -152,6 +152,7 @@ def generate_launch_description():
             "model_path": model_path,
             "inference_backend": detection_device,
             "yolo_model": LaunchConfiguration("yolo_model_name"),
+            "aim_target_topic": "/perception/aim_target_2d",
             "enable_future_inputs": LaunchConfiguration(
                 "enable_monitor_future_inputs"
             ),

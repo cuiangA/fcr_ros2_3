@@ -35,7 +35,8 @@
   <depend>tf2</depend>
   <depend>tf2_ros</depend>             <!-- 坐标变换 -->
   <depend>tf2_geometry_msgs</depend>
-  <depend>libopencv-dev</depend>              <!-- 图像处理与 DNN 推理 -->
+  <depend>libopencv-dev</depend>              <!-- 图像处理 -->
+  <depend>onnxruntime_vendor</depend>   <!-- ONNX Runtime C++ 库 (YOLOv8 推理后端) -->
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>launch_testing</test_depend>

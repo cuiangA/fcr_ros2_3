@@ -29,6 +29,7 @@
 #include <opencv2/video/tracking.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <vision_servo_msgs/msg/target_array.hpp>
 #include <vision_servo_msgs/srv/set_tracking_target.hpp>
 
@@ -110,6 +111,7 @@ private:
   rclcpp::Subscription<vision_servo_msgs::msg::TargetArray>::SharedPtr det_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
   rclcpp::Publisher<vision_servo_msgs::msg::TargetArray>::SharedPtr track_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr selector_state_pub_;
   rclcpp::Service<vision_servo_msgs::srv::SetTrackingTarget>::SharedPtr tracking_srv_;
 
   std::unique_ptr<TrackerInterface> tracker_; ///< Startup-selected 2D tracker

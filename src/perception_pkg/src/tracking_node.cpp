@@ -159,6 +159,10 @@ TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
       descriptor("Automatically select the best confirmed target when none is locked."));
   this->declare_parameter("class_filter", "person",
       descriptor("Class used for automatic target selection; empty accepts every class."));
+  this->declare_parameter("allow_auto_switch", false,
+      descriptor("Allow automatic switch to another person after lost timeout."));
+  this->declare_parameter("switch_delay_seconds", 0.0,
+      floating_descriptor("Additional delay before auto-switch to another person.", 0.0, 60.0));
   this->declare_parameter("input_timeout_seconds", 2.0,
       floating_descriptor("Warn after this many seconds without detections messages.", 0.1, 3600.0));
   this->declare_parameter("performance_log_period", 5.0,
@@ -244,9 +248,12 @@ TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
   }
   const bool auto_select = this->get_parameter("auto_select").as_bool();
   const std::string target_class_filter = this->get_parameter("class_filter").as_string();
+  const bool allow_auto_switch = this->get_parameter("allow_auto_switch").as_bool();
+  const double switch_delay_seconds = this->get_parameter("switch_delay_seconds").as_double();
   input_timeout_seconds_ = this->get_parameter("input_timeout_seconds").as_double();
   performance_log_period_ = this->get_parameter("performance_log_period").as_double();
-  target_selector_ = TargetSelector(auto_select, target_class_filter);
+  target_selector_ = TargetSelector(
+      auto_select, target_class_filter, 2.5, allow_auto_switch, switch_delay_seconds);
 
   det_sub_ = this->create_subscription<vision_servo_msgs::msg::TargetArray>(
     "detections", qos::perception(),
@@ -260,6 +267,8 @@ TrackingNode::TrackingNode(const rclcpp::NodeOptions& options)
 
   track_pub_ = this->create_publisher<vision_servo_msgs::msg::TargetArray>(
     "tracks", qos::perception());
+  selector_state_pub_ = this->create_publisher<std_msgs::msg::String>(
+    "/tracking_node/selector_status", rclcpp::QoS(10));
 
   tracking_srv_ = this->create_service<vision_servo_msgs::srv::SetTrackingTarget>(
     "~/set_tracking_target",
@@ -316,6 +325,11 @@ void TrackingNode::detection_callback(
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     tracks.tracking_id = target_selector_.update(tracks);
+    std_msgs::msg::String state_msg;
+    state_msg.data = "state=" + target_selector_.state_name() +
+        " id=" + std::to_string(target_selector_.active_id()) +
+        " reason=" + target_selector_.switch_reason();
+    selector_state_pub_->publish(state_msg);
   }
   track_pub_->publish(tracks);
 
@@ -400,6 +414,13 @@ void TrackingNode::diagnostic_callback(
   status.add(
       "valid_camera_motion_frames",
       valid_camera_motion_frames_.load(std::memory_order_relaxed));
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    status.add("selector_state", target_selector_.state_name());
+    status.add("selector_active_id", target_selector_.active_id());
+    status.add("selector_reason", target_selector_.switch_reason());
+    status.add("selector_manual_lock", target_selector_.manual_lock() ? "true" : "false");
+  }
 }
 
 }  // namespace perception_pkg

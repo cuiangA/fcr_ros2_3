@@ -41,6 +41,7 @@ def generate_launch_description():
             "enable_foxglove": "true",
             "foxglove_address": "0.0.0.0",
             "foxglove_port": "8765",
+            "aim_target_topic": "/perception/aim_target_2d",
             "max_frame_age_ms": "1000",
         }.items(),
     )

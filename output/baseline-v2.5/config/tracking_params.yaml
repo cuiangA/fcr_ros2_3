@@ -43,7 +43,5 @@ tracking_node:
     camera_frame: ""                 # Empty preserves the detector frame_id
     auto_select: true
     class_filter: "person"
-    allow_auto_switch: false       # 默认禁止自动切换其他人
-    switch_delay_seconds: 0.0      # 自动切换前的额外等待时间
     input_timeout_seconds: 2.0
     performance_log_period: 5.0

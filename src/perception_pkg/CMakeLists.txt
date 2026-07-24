@@ -135,10 +135,17 @@ if(PERCEPTION_BUILD_LEGACY_FUSION)
     RUNTIME DESTINATION bin)
 endif()
 
+add_executable(face_aim_node src/face_aim_node.cpp)
+target_include_directories(face_aim_node PRIVATE include ${OpenCV_INCLUDE_DIRS})
+ament_target_dependencies(face_aim_node
+  rclcpp sensor_msgs vision_servo_msgs cv_bridge image_transport)
+target_link_libraries(face_aim_node perception_qos ${OpenCV_LIBS})
+
 install(TARGETS
   yolo_processing
   detection_node
   tracking_node
+  face_aim_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})
@@ -147,6 +154,7 @@ install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES models/README.md models/manifest.json DESTINATION share/${PROJECT_NAME}/models)
 install(PROGRAMS
   scripts/download_model.py
+  scripts/video_publisher.py
   scripts/check_perception.sh
   scripts/jetson_build_perception.sh
   scripts/jetson_acceptance.sh
@@ -207,5 +215,8 @@ if(BUILD_TESTING)
   endif()
   add_launch_test(test/test_tracking_launch.py TIMEOUT 30)
 endif()
+
+# ── 模型文件（供 detection_params.yaml 用 find-pkg-share 解析） ───────
+install(DIRECTORY models/ DESTINATION share/${PROJECT_NAME}/models)
 
 ament_package()

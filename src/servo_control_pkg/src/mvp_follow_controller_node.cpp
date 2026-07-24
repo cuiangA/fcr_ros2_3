@@ -116,6 +116,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 
+#include <vision_servo_msgs/msg/aim_target2_d.hpp>
 #include <vision_servo_msgs/msg/gimbal_cmd.hpp>
 #include <vision_servo_msgs/msg/platform_state.hpp>
 #include <vision_servo_msgs/msg/target.hpp>
@@ -234,6 +235,12 @@ public:
       camera_info_topic_, rclcpp::SensorDataQoS(),
       std::bind(&MvpFollowControllerNode::camera_info_callback, this, std::placeholders::_1));
 
+    // 瞄准目标（AimTarget2D）— 用于云台 yaw/pitch 控制。
+    // 与 /perception/tracks（底盘深度控制）解耦，改变瞄准点不影响底盘距离。
+    aim_target_sub_ = create_subscription<vision_servo_msgs::msg::AimTarget2D>(
+      aim_target_topic_, rclcpp::SensorDataQoS(),
+      std::bind(&MvpFollowControllerNode::aim_target_callback, this, std::placeholders::_1));
+
     // 平台状态：底盘当前线速度/角速度 + 云台 yaw/pitch 角度。
     // control_loop 需要云台偏航角 q_yaw 作为底盘偏航控制的外环反馈量。
     platform_sub_ = create_subscription<vision_servo_msgs::msg::PlatformState>(
@@ -269,6 +276,7 @@ public:
       period, std::bind(&MvpFollowControllerNode::control_loop, this));
 
     last_valid_target_time_ = now();
+    last_valid_aim_time_ = now();
 
     RCLCPP_INFO(
       get_logger(),
@@ -527,6 +535,17 @@ private:
       "target_timeout", 0.5,
       "Seconds before the target is treated as lost.");
 
+    // ── L) 瞄准目标（AimTarget2D）参数 ──────────────────────────────
+    //
+    // 云台 yaw/pitch 从 /perception/aim_target_2d 获取，与底盘深度控制解耦。
+    // 超时后云台输出零速，防止瞄准中断后保留非零指令。
+    aim_target_topic_ = declare_described_parameter<std::string>(
+      "aim_target_topic", "/perception/aim_target_2d",
+      "AimTarget2D topic for gimbal yaw/pitch control.");
+    aim_target_timeout_ = declare_described_parameter<double>(
+      "aim_target_timeout", 0.25,
+      "Seconds before the aim target is treated as lost.");
+
     // ── L) Mock 云台角度（当 use_mock_gimbal_state=true 时生效）─────────
     //
     // 用于独立测试（不需要真正的 PlatformState 话题）。
@@ -589,6 +608,22 @@ private:
     active_target_ = *selected;
     has_valid_target_ = true;
     last_valid_target_time_ = now();
+  }
+
+  /**
+   * @brief 瞄准目标回调 — 缓存 AimTarget2D 用于云台 yaw/pitch 控制。
+   *
+   * 仅缓存 pixel_x/pixel_y/valid，不参与底盘控制。
+   * 底盘深度控制仍从 /perception/tracks（active_target_）获取。
+   */
+  void aim_target_callback(const vision_servo_msgs::msg::AimTarget2D::ConstSharedPtr msg)
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    active_aim_target_ = *msg;
+    has_valid_aim_ = msg->valid;
+    if (msg->valid) {
+      last_valid_aim_time_ = now();
+    }
   }
 
   /**
@@ -754,14 +789,17 @@ private:
    * @brief 主控制回路入口（50 Hz 定时器回调）。
    *
    * 每帧执行：
-   *   1. 检查目标是否超时 → 超时则发布零速度并重置滤波器
-   *   2. 调用 compute_control() 计算底盘+云台指令
-   *   3. 调用 publish_command() 发布指令
+   *   1. 检查底盘目标是否超时 → 超时则发布零速度并重置所有滤波器
+   *   2. 检查瞄准目标是否超时 → 超时则重置云台滤波器并输出零速
+   *   3. 调用 compute_control() 计算底盘+云台指令
+   *   4. 调用 publish_command() 发布指令
    */
   void control_loop()
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     const auto current_time = now();
+
+    // ── 底盘目标超时检查 ─────────────────────────────────────────
     if ((require_camera_info_ && !camera_info_received_) ||
         !has_recent_target(current_time)) {
       RCLCPP_WARN_THROTTLE(
@@ -773,6 +811,26 @@ private:
       reset_command_filters();
       publish_zero_command();
       return;
+    }
+
+    // ── 瞄准目标超时检查 ─────────────────────────────────────────
+    // 瞄准超时后重置云台滤波器并输出零速，确保不保留上一条非零指令。
+    // 注意：aim_target_callback 可能在 control_loop 之前已将
+    // has_valid_aim_ 置 false（valid=false），因此不能以 has_valid_aim_
+    // 为条件；必须无条件重置滤波器。
+    if (!has_recent_aim(current_time)) {
+      if (!aim_timeout_reported_) {
+        RCLCPP_WARN(
+          get_logger(),
+          "Aim target timeout (%.3fs); resetting gimbal filters",
+          aim_target_timeout_);
+        aim_timeout_reported_ = true;
+      }
+      has_valid_aim_ = false;
+      filtered_gimbal_yaw_vel_ = 0.0;
+      filtered_gimbal_pitch_vel_ = 0.0;
+    } else {
+      aim_timeout_reported_ = false;
     }
 
     const auto command = compute_control();
@@ -794,11 +852,29 @@ private:
   }
 
   /**
+   * @brief 判断最近是否收到有效瞄准目标。
+   *
+   * 超时条件：当前时间 - 最后一次有效瞄准时间 > aim_target_timeout_。
+   * 默认 0.25s（250ms），比底盘目标超时（0.5s）更短，确保瞄准中断后云台快速停止。
+   */
+  bool has_recent_aim(const rclcpp::Time& current_time) const
+  {
+    if (!has_valid_aim_) {
+      return false;
+    }
+    return (current_time - last_valid_aim_time_).seconds() <= aim_target_timeout_;
+  }
+
+  /**
    * @brief 核心控制律 — 三通道解耦 P 控制 + 可选的云台 IBVS。
+   *
+   * 云台 yaw/pitch 来自 /perception/aim_target_2d（AimTarget2D.pixel_x/pixel_y），
+   * 底盘深度来自 /perception/tracks（Target.position[2]），两者数据源分离。
    *
    * ── 信号流 ───────────────────────────────────────────────────────
    *
-   *   像素中心 (px, py)     深度 depth            云台偏航 q_yaw
+   *   瞄准点 (px, py)        深度 depth            云台偏航 q_yaw
+   *   (AimTarget2D)      (Target.position[2])          │
    *        │                     │                      │
    *        ▼                     ▼                      ▼
    *   归一化误差              深度误差                死区判断
@@ -841,13 +917,11 @@ private:
    */
   ControlCommand compute_control()
   {
-    // ── 步骤 1: 提取像素中心，计算归一化图像误差 ─────────────────
+    // ── 步骤 1: 提取瞄准点和深度 ──────────────────────────────────
     //
-    // 归一化：将像素偏移除以半幅图像尺寸，映射到 [-1, 1]。
-    //   ex = +1: 目标在最右侧
-    //   ex = -1: 目标在最左侧
-    //   ex =  0: 目标在水平中心
-    const auto center = target_center_pixels(active_target_);
+    // 云台像素坐标从 /perception/aim_target_2d（AimTarget2D）获取，
+    // 底盘深度从 /perception/tracks（Target.position[2]）获取。
+    // 两者数据源分离：改变瞄准点不影响底盘距离控制。
     const double half_width = 0.5 * static_cast<double>(image_width_);
     const double half_height = 0.5 * static_cast<double>(image_height_);
     const double desired_x = center_reference_ == "principal_point" && camera_cx_ > 0.0
@@ -855,8 +929,13 @@ private:
     const double desired_y = center_reference_ == "principal_point" && camera_cy_ > 0.0
       ? camera_cy_ : half_height;
 
-    const double ex_raw = (center.first - desired_x) / half_width;
-    const double ey_raw = (center.second - desired_y) / half_height;
+    const double aim_px = has_valid_aim_
+      ? static_cast<double>(active_aim_target_.pixel_x) : desired_x;
+    const double aim_py = has_valid_aim_
+      ? static_cast<double>(active_aim_target_.pixel_y) : desired_y;
+
+    const double ex_raw = (aim_px - desired_x) / half_width;
+    const double ey_raw = (aim_py - desired_y) / half_height;
     const double depth_raw = active_target_.position[2];
     const bool depth_valid = translation_depth_valid(active_target_);
 
@@ -925,14 +1004,15 @@ private:
         q_yaw, k_base_yaw_, base_yaw_sign_, q_yaw_deadband_, max_base_wz_);
     }
 
-    // ── 步骤 6: 云台指令（图像误差跟踪） ─────────────────────────
+    // ── 步骤 6: 云台指令（瞄准点误差跟踪） ───────────────────────
     //
+    // 瞄准点来自 /perception/aim_target_2d，与底盘深度数据源分离。
     // 两种模式可选：
     //   use_ibvs_gimbal_=true:  单点特征 IBVS 角速度求解（考虑透视投影几何）
     //   use_ibvs_gimbal_=false: 纯 P 控制，软件符号由 yaw_sign/pitch_sign 标定
-    const auto gimbal_command = enable_gimbal_tracking_
+    const auto gimbal_command = enable_gimbal_tracking_ && has_valid_aim_
       ? (use_ibvs_gimbal_
-          ? compute_ibvs_gimbal_velocity(center.first, center.second)
+          ? compute_ibvs_gimbal_velocity(aim_px, aim_py)
           : compute_proportional_gimbal_velocity(ex, ey))
       : std::pair<double, double>{0.0, 0.0};
     double gimbal_yaw_vel = gimbal_command.first;
@@ -1294,17 +1374,27 @@ private:
   double captured_gimbal_yaw_center_ = 0.0;
   bool gimbal_yaw_center_captured_ = false;
 
-  // ── L) 运行时状态 — 目标数据 ────────────────────────────────────
+  // ── L) 瞄准目标（AimTarget2D）参数 ──────────────────────────────
+  std::string aim_target_topic_{"/perception/aim_target_2d"};
+  double aim_target_timeout_ = 0.25;      ///< 瞄准目标超时 (s)，默认 250ms
+
+  // ── M) 运行时状态 — 目标数据 ────────────────────────────────────
   Target active_target_;                  ///< 当前伺服跟踪的目标（值拷贝）
   bool has_valid_target_ = false;         ///< 是否有有效目标可供控制
   rclcpp::Time last_valid_target_time_;   ///< 最后一次收到有效目标的时刻
 
-  // ── M) 运行时状态 — 平台反馈 ────────────────────────────────────
+  // ── N) 运行时状态 — 瞄准目标数据 ────────────────────────────────
+  vision_servo_msgs::msg::AimTarget2D active_aim_target_;  ///< 缓存的瞄准目标
+  bool has_valid_aim_ = false;            ///< 是否有有效瞄准目标
+  rclcpp::Time last_valid_aim_time_;      ///< 最后一次收到有效瞄准的时刻
+  bool aim_timeout_reported_ = false;     ///< 超时日志是否已输出（单次抑制）
+
+  // ── O) 运行时状态 — 平台反馈 ────────────────────────────────────
   bool platform_state_received_ = false;  ///< 是否已收到过至少一次 PlatformState
   double platform_q_yaw_ = 0.0;           ///< 缓存的云台偏航角 (rad)
   double platform_q_pitch_ = 0.0;         ///< 缓存的云台俯仰角 (rad)
 
-  // ── N) 运行时状态 — 滤波器记忆 ──────────────────────────────────
+  // ── P) 运行时状态 — 滤波器记忆 ──────────────────────────────────
   //
   // 第一级滤波（传感器端）：抑制检测噪声
   bool error_filter_initialized_ = false; ///< 图像误差滤波器是否已初始化
@@ -1319,8 +1409,9 @@ private:
   double filtered_gimbal_yaw_vel_ = 0.0;  ///< 滤波后的云台偏航角速度 (rad/s)
   double filtered_gimbal_pitch_vel_ = 0.0;///< 滤波后的云台俯仰角速度 (rad/s)
 
-  // ── O) ROS2 通信接口 ─────────────────────────────────────────────
+  // ── Q) ROS2 通信接口 ─────────────────────────────────────────────
   rclcpp::Subscription<vision_servo_msgs::msg::TargetArray>::SharedPtr target_sub_;
+  rclcpp::Subscription<vision_servo_msgs::msg::AimTarget2D>::SharedPtr aim_target_sub_;
   rclcpp::Subscription<vision_servo_msgs::msg::PlatformState>::SharedPtr platform_sub_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_stamped_pub_;

@@ -14,6 +14,7 @@ __pycache__/
 *.egg-info/
 yolo_env/
 runs/
+.venv/
 
 # OS
 .DS_Store
@@ -27,10 +28,15 @@ build/*/test_results/
 *.mcap
 
 #zhou_mi_ignore
-##Perception doc
 perception_doc/
-##project_documentation.md
 project_documentation.md
+yolov8n.onnx
+yolov8n.pt
+pictures/
+pictures/*.jpg
+pictures/*.png
+src/perception_pkg/video/
+
 bags/
 classifier/bert_intent_output/model.safetensors
 classifier/bert_intent_output/training_args.bin
