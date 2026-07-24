@@ -1,4 +1,4 @@
-# BERT 控制台云台验证节点
+# 语音意图控制台验证节点
 
 这个包用于跳过麦克风和 ASR，直接从终端输入中文文本。每条文本都会先经过
 BERT 推理，节点会打印 BERT 原始意图和置信度，然后发布现有的
@@ -14,3 +14,15 @@ BERT 推理，节点会打印 BERT 原始意图和置信度，然后发布现有
 `gimbal_rule`，不会把规则结果伪装成 BERT 分类结果。
 
 完整实机步骤见 `docs/bert_console_gimbal_test.md`。
+
+## 双层模型
+
+新版模型采用“BERT 大类 + 双 SVM 细类”，能够区分底盘移动、云台视野、
+运镜模式、录制、停止、状态查询和干扰项。新版入口为：
+
+```bash
+ros2 run voice_intent_pkg double_layer_console_voice_node
+```
+
+模型及语义嵌入权重仍放在工作空间外部。完整部署和验证步骤见
+`docs/double_layer_intent_model_test.md`。

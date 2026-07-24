@@ -13,6 +13,7 @@
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>external_control_pkg</exec_depend>
+  <!-- Python ML dependencies are installed in the fcr_bert virtual environment. -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
